@@ -28,6 +28,29 @@ app.get('/test-db', async (req, res) => {
     }
 });
 
+app.get('/test-db', async (req, res) => {
+    const db = require('./config/database');
+    try {
+        const [result] = await db.query('SELECT 1 as test, NOW() as time');
+        res.json({ 
+            success: true, 
+            message: 'Base de datos conectada exitosamente',
+            result,
+            env: {
+                host: process.env.DB_HOST,
+                database: process.env.DB_NAME
+            }
+        });
+    } catch (error) {
+        console.error('Error en test-db:', error);
+        res.status(500).json({ 
+            success: false, 
+            message: error.message,
+            stack: error.stack
+        });
+    }
+});
+
 // Iniciar servidor
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
