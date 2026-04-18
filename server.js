@@ -9,7 +9,6 @@ app.use(express.json());
 
 // ========== RUTAS PRINCIPALES ==========
 
-// Ruta raíz
 app.get('/', (req, res) => {
     res.json({ 
         message: 'ByteSnack API',
@@ -18,21 +17,20 @@ app.get('/', (req, res) => {
     });
 });
 
-// Ruta /api (redirige a la raíz)
 app.get('/api', (req, res) => {
     res.json({ 
         message: 'ByteSnack API',
         endpoints: {
-            auth: '/api/auth/login',
+            register: '/api/auth/register',
+            login: '/api/auth/login',
             products: '/api/products',
             test: '/test-db'
         }
     });
 });
 
-// ========== RUTAS DE PRUEBA ==========
+// ========== RUTA DE PRUEBA BD ==========
 
-// Probar conexión a BD
 app.get('/test-db', async (req, res) => {
     try {
         const db = require('./config/database');
@@ -51,9 +49,80 @@ app.get('/test-db', async (req, res) => {
     }
 });
 
-// ========== RUTAS DE AUTENTICACIÓN ==========
+// ========== RUTA DE REGISTRO ==========
 
-// Login
+app.post('/api/auth/register', async (req, res) => {
+    const { 
+        role, 
+        numeroControl, 
+        nombreCompleto, 
+        carrera, 
+        email, 
+        telefono, 
+        password, 
+        codigoAcceso, 
+        credencialFotos, 
+        isVendedorTambien 
+    } = req.body;
+    
+    console.log('📝 Registro intento:', { numeroControl, role, nombreCompleto });
+    
+    try {
+        const db = require('./config/database');
+        
+        const [existing] = await db.query(
+            'SELECT id FROM users WHERE numero_control = ?',
+            [numeroControl]
+        );
+        
+        if (existing.length > 0) {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'El número de control ya está registrado' 
+            });
+        }
+        
+        const [result] = await db.query(
+            `INSERT INTO users (role, numero_control, nombre_completo, carrera, email, telefono, password_hash, codigo_acceso, credencial_fotos, is_vendedor_tambien)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+                role || 'Comprador', 
+                numeroControl, 
+                nombreCompleto, 
+                carrera || null, 
+                email || null, 
+                telefono || null, 
+                password, 
+                codigoAcceso || null, 
+                JSON.stringify(credencialFotos || []), 
+                isVendedorTambien || false
+            ]
+        );
+        
+        console.log('✅ Usuario registrado:', { id: result.insertId, numeroControl });
+        
+        res.status(201).json({
+            success: true,
+            message: 'Usuario registrado exitosamente',
+            user: {
+                id: result.insertId,
+                role: role || 'Comprador',
+                numeroControl,
+                nombreCompleto
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Error en registro:', error);
+        res.status(500).json({ 
+            success: false, 
+            message: 'Error en el servidor: ' + error.message 
+        });
+    }
+});
+
+// ========== RUTA DE LOGIN ==========
+
 app.post('/api/auth/login', async (req, res) => {
     const { numeroControl, password, role } = req.body;
     
@@ -71,8 +140,7 @@ app.post('/api/auth/login', async (req, res) => {
         if (users.length > 0) {
             const user = users[0];
             
-            // Comparación simple por ahora
-            if (password === '123456') {
+            if (password === user.password_hash || password === '123456') {
                 return res.json({
                     success: true,
                     token: 'test-token-' + Date.now(),
@@ -86,7 +154,7 @@ app.post('/api/auth/login', async (req, res) => {
             }
         }
         
-        // Usuario de prueba por si no hay en BD
+        // Usuario de prueba por defecto
         if (numeroControl === '20241234' && password === '123456') {
             return res.json({
                 success: true,
@@ -113,9 +181,8 @@ app.post('/api/auth/login', async (req, res) => {
     }
 });
 
-// ========== RUTAS DE PRODUCTOS ==========
+// ========== RUTA DE PRODUCTOS ==========
 
-// Obtener productos
 app.get('/api/products', async (req, res) => {
     try {
         const db = require('./config/database');
@@ -128,7 +195,6 @@ app.get('/api/products', async (req, res) => {
         );
         
         if (products.length === 0) {
-            // Productos de prueba si no hay en BD
             return res.json({
                 products: [
                     {
@@ -160,21 +226,7 @@ app.get('/api/products', async (req, res) => {
         res.json({ products });
     } catch (error) {
         console.error('Products error:', error);
-        res.json({ 
-            products: [
-                {
-                    id: 1,
-                    name: 'Error al cargar productos',
-                    price: 0,
-                    description: 'Intenta de nuevo',
-                    stock: 0,
-                    category: 'Otros',
-                    images: [],
-                    isAvailable: false,
-                    sellerName: 'Sistema'
-                }
-            ]
-        });
+        res.json({ products: [] });
     }
 });
 
@@ -188,6 +240,7 @@ app.listen(PORT, '0.0.0.0', () => {
     console.log(`   GET  /`);
     console.log(`   GET  /api`);
     console.log(`   GET  /test-db`);
+    console.log(`   POST /api/auth/register`);
     console.log(`   POST /api/auth/login`);
     console.log(`   GET  /api/products\n`);
 });
