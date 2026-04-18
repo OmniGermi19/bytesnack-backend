@@ -12,7 +12,8 @@ app.get('/', (req, res) => {
     res.json({ 
         message: 'ByteSnack API',
         version: '1.0.0',
-        status: 'online'
+        status: 'online',
+        database: process.env.DATABASE_URL ? '✅ Conectado a BD' : '⚠️ Sin BD'
     });
 });
 
@@ -20,7 +21,7 @@ app.get('/', (req, res) => {
 app.get('/test-db', async (req, res) => {
     try {
         const db = require('./config/database');
-        const [result] = await db.query('SELECT 1 as test, NOW() as time');
+        const [result] = await db.query('SELECT 1 as test, NOW() as time, DATABASE() as db_name');
         res.json({ 
             success: true, 
             message: 'Base de datos conectada',
@@ -35,61 +36,67 @@ app.get('/test-db', async (req, res) => {
     }
 });
 
-// Ruta de login (temporal para probar)
+// Ruta de login (temporal para pruebas)
 app.post('/api/auth/login', async (req, res) => {
     const { numeroControl, password, role } = req.body;
     
-    // Respuesta temporal para pruebas
-    if (numeroControl === '20241234' && password === '123456') {
-        return res.json({
-            success: true,
-            token: 'test-token-123',
-            user: {
-                id: 1,
-                role: role || 'Comprador',
-                numeroControl,
-                nombreCompleto: 'Usuario Test'
+    try {
+        const db = require('./config/database');
+        const [users] = await db.query(
+            'SELECT * FROM users WHERE numero_control = ? AND is_active = 1',
+            [numeroControl]
+        );
+        
+        if (users.length > 0) {
+            const user = users[0];
+            // Por ahora, comparación simple (después usar bcrypt)
+            if (password === '123456') {
+                return res.json({
+                    success: true,
+                    token: 'test-token-' + Date.now(),
+                    user: {
+                        id: user.id,
+                        role: user.role,
+                        numeroControl: user.numero_control,
+                        nombreCompleto: user.nombre_completo
+                    }
+                });
             }
+        }
+        
+        res.status(401).json({ 
+            success: false, 
+            message: 'Credenciales incorrectas' 
+        });
+    } catch (error) {
+        console.error('Login error:', error);
+        res.status(500).json({ 
+            success: false, 
+            message: 'Error en el servidor' 
         });
     }
-    
-    res.status(401).json({ 
-        success: false, 
-        message: 'Credenciales incorrectas' 
-    });
 });
 
 // Ruta de productos
 app.get('/api/products', async (req, res) => {
-    res.json({
-        products: [
-            {
-                id: 1,
-                name: 'Papas Sabritas',
-                price: 15,
-                description: 'Papas fritas sabor limón',
-                stock: 50,
-                category: 'Botanas',
-                images: [],
-                isAvailable: true,
-                sellerName: 'Vendedor Test'
-            },
-            {
-                id: 2,
-                name: 'Coca-Cola',
-                price: 18,
-                description: 'Refresco de cola 600ml',
-                stock: 30,
-                category: 'Bebidas',
-                images: [],
-                isAvailable: true,
-                sellerName: 'Vendedor Test'
-            }
-        ]
-    });
+    try {
+        const db = require('./config/database');
+        const [products] = await db.query(
+            `SELECT p.*, u.nombre_completo as seller_name 
+             FROM products p
+             JOIN users u ON p.seller_id = u.id
+             WHERE p.is_available = 1
+             LIMIT 20`
+        );
+        res.json({ products });
+    } catch (error) {
+        console.error('Products error:', error);
+        res.json({ products: [] });
+    }
 });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
+    console.log(`\n🚀 Servidor corriendo en puerto ${PORT}`);
+    console.log(`📡 DATABASE_URL: ${process.env.DATABASE_URL ? '✅ Configurada' : '❌ No configurada'}\n`);
 });
