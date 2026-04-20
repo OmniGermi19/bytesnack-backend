@@ -1,95 +1,122 @@
-const express = require('express');
-const db = require('../config/database');
-const { authenticateToken, isSeller } = require('../middleware/auth');
-const router = express.Router();
+const jwt = require('jsonwebtoken');
 
-// GET /api/products
-router.get('/', async (req, res) => {
-    const { category, search, page = 1, limit = 20 } = req.query;
-    const offset = (parseInt(page) - 1) * parseInt(limit);
+module.exports = (db) => {
+    const router = require('express').Router();
 
-    try {
+    // Middleware para verificar token
+    const verifyToken = (req, res, next) => {
+        const token = req.headers.authorization?.replace('Bearer ', '');
+        if (!token) {
+            return res.status(401).json({ message: 'No token provided' });
+        }
+        try {
+            const decoded = jwt.verify(token, process.env.JWT_SECRET);
+            req.userId = decoded.userId;
+            req.userRole = decoded.role;
+            next();
+        } catch (e) {
+            return res.status(401).json({ message: 'Invalid token' });
+        }
+    };
+
+    // GET /api/products - Obtener todos los productos
+    router.get('/', (req, res) => {
+        const { category, search, page = 1, limit = 20 } = req.query;
+        const offset = (parseInt(page) - 1) * parseInt(limit);
+        
         let query = `
-            SELECT p.*, u.nombre_completo as seller_name
+            SELECT p.*, u.nombreCompleto as sellerName
             FROM products p
-            JOIN users u ON p.seller_id = u.id
-            WHERE p.is_available = 1
+            JOIN users u ON p.sellerId = u.id
+            WHERE p.isAvailable = TRUE
         `;
         const params = [];
-
+        
         if (category && category !== 'Todos') {
             query += ' AND p.category = ?';
             params.push(category);
         }
-
-        if (search && search.trim() !== '') {
+        
+        if (search && search.trim()) {
             query += ' AND (p.name LIKE ? OR p.description LIKE ?)';
             params.push(`%${search}%`, `%${search}%`);
         }
-
-        query += ' ORDER BY p.created_at DESC LIMIT ? OFFSET ?';
+        
+        query += ' ORDER BY p.createdAt DESC LIMIT ? OFFSET ?';
         params.push(parseInt(limit), offset);
-
-        const [products] = await db.query(query, params);
         
-        const parsedProducts = products.map(p => ({
-            ...p,
-            images: p.images ? JSON.parse(p.images) : []
-        }));
-        
-        res.json({ products: parsedProducts });
-    } catch (error) {
-        console.error('Error getting products:', error);
-        res.status(500).json({ success: false, message: 'Error al obtener productos' });
-    }
-});
-
-// POST /api/products
-router.post('/', authenticateToken, isSeller, async (req, res) => {
-    const { name, price, description, category, images, stock, location } = req.body;
-
-    if (!name || !price) {
-        return res.status(400).json({ success: false, message: 'Nombre y precio son requeridos' });
-    }
-
-    try {
-        const [result] = await db.query(
-            `INSERT INTO products (seller_id, name, price, description, category, images, stock, location)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-            [req.userId, name, price, description || '', category || 'Otros', JSON.stringify(images || []), stock || 0, location || 'Sin ubicación']
-        );
-
-        res.status(201).json({
-            success: true,
-            message: 'Producto creado exitosamente',
-            productId: result.insertId
+        db.query(query, params, (err, products) => {
+            if (err) {
+                console.error('Error obteniendo productos:', err);
+                return res.status(500).json({ message: 'Error al cargar productos' });
+            }
+            res.json(products);
         });
-    } catch (error) {
-        console.error('Error creating product:', error);
-        res.status(500).json({ success: false, message: 'Error al crear producto' });
-    }
-});
+    });
 
-// DELETE /api/products/:id
-router.delete('/:id', authenticateToken, async (req, res) => {
-    try {
-        const [product] = await db.query('SELECT seller_id FROM products WHERE id = ?', [req.params.id]);
+    // GET /api/products/:id - Obtener un producto
+    router.get('/:id', (req, res) => {
+        db.query(
+            `SELECT p.*, u.nombreCompleto as sellerName
+             FROM products p
+             JOIN users u ON p.sellerId = u.id
+             WHERE p.id = ?`,
+            [req.params.id],
+            (err, products) => {
+                if (err) return res.status(500).json({ message: 'Error' });
+                if (products.length === 0) return res.status(404).json({ message: 'Producto no encontrado' });
+                res.json(products[0]);
+            }
+        );
+    });
 
-        if (product.length === 0) {
-            return res.status(404).json({ success: false, message: 'Producto no encontrado' });
-        }
+    // POST /api/products - Crear producto
+    router.post('/', verifyToken, (req, res) => {
+        const { name, price, description, sellerId, sellerName, images, stock, location, category } = req.body;
+        
+        db.query(
+            `INSERT INTO products (name, price, description, sellerId, sellerName, images, stock, location, category, isAvailable, createdAt)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE, NOW())`,
+            [name, price, description, sellerId, sellerName, JSON.stringify(images), stock, location, category],
+            (err, result) => {
+                if (err) {
+                    console.error('Error creando producto:', err);
+                    return res.status(500).json({ message: 'Error al crear producto' });
+                }
+                res.status(201).json({ id: result.insertId, message: 'Producto creado' });
+            }
+        );
+    });
 
-        if (product[0].seller_id !== req.userId && req.userRole !== 'Administrador') {
-            return res.status(403).json({ success: false, message: 'No tienes permiso para eliminar este producto' });
-        }
+    // PUT /api/products/:id - Actualizar producto
+    router.put('/:id', verifyToken, (req, res) => {
+        const { name, price, description, images, stock, location, category, isAvailable } = req.body;
+        
+        db.query(
+            `UPDATE products 
+             SET name = ?, price = ?, description = ?, images = ?, stock = ?, location = ?, category = ?, isAvailable = ?, updatedAt = NOW()
+             WHERE id = ?`,
+            [name, price, description, JSON.stringify(images), stock, location, category, isAvailable, req.params.id],
+            (err) => {
+                if (err) {
+                    console.error('Error actualizando producto:', err);
+                    return res.status(500).json({ message: 'Error al actualizar' });
+                }
+                res.json({ message: 'Producto actualizado' });
+            }
+        );
+    });
 
-        await db.query('UPDATE products SET is_available = 0 WHERE id = ?', [req.params.id]);
+    // DELETE /api/products/:id - Eliminar producto
+    router.delete('/:id', verifyToken, (req, res) => {
+        db.query('DELETE FROM products WHERE id = ?', [req.params.id], (err) => {
+            if (err) {
+                console.error('Error eliminando producto:', err);
+                return res.status(500).json({ message: 'Error al eliminar' });
+            }
+            res.json({ message: 'Producto eliminado' });
+        });
+    });
 
-        res.json({ success: true, message: 'Producto eliminado' });
-    } catch (error) {
-        console.error('Error deleting product:', error);
-        res.status(500).json({ success: false, message: 'Error al eliminar producto' });
-    }
-});
-
-module.exports = router;
+    return router;
+};

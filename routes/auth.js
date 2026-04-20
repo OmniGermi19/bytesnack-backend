@@ -1,178 +1,147 @@
-const express = require('express');
-const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const db = require('../config/database');
-const router = express.Router();
+const bcrypt = require('bcryptjs');
 
-const generateTokens = (userId, role) => {
-    const token = jwt.sign({ userId, role }, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRES_IN });
-    const refreshToken = jwt.sign({ userId, role }, process.env.JWT_REFRESH_SECRET, { expiresIn: process.env.JWT_REFRESH_EXPIRES_IN });
-    return { token, refreshToken };
-};
+module.exports = (db) => {
+    const router = require('express').Router();
 
-const saveRefreshToken = async (userId, refreshToken) => {
-    const expiresAt = new Date();
-    expiresAt.setDate(expiresAt.getDate() + 30);
-    await db.query(
-        'INSERT INTO refresh_tokens (user_id, token, expires_at) VALUES (?, ?, ?)',
-        [userId, refreshToken, expiresAt]
-    );
-};
-
-// REGISTRO
-router.post('/register', async (req, res) => {
-    const { 
-        role, numeroControl, nombreCompleto, carrera, email, 
-        telefono, password, codigoAcceso, credencialFotos, isVendedorTambien 
-    } = req.body;
-
-    try {
-        const [existing] = await db.query(
-            'SELECT id FROM users WHERE numero_control = ?',
-            [numeroControl]
-        );
+    // REGISTRO
+    router.post('/register', async (req, res) => {
+        console.log('📝 Registro:', req.body.numeroControl);
         
-        if (existing.length > 0) {
-            return res.status(400).json({ success: false, message: 'El número de control ya está registrado' });
-        }
-
-        const hashedPassword = await bcrypt.hash(password || 'default123', 10);
-
-        const [result] = await db.query(
-            `INSERT INTO users (role, numero_control, nombre_completo, carrera, email, telefono, password_hash, codigo_acceso, credencial_fotos, is_vendedor_tambien)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [role || 'Comprador', numeroControl, nombreCompleto, carrera || null, email || null, telefono || null, hashedPassword, codigoAcceso || null, JSON.stringify(credencialFotos || []), isVendedorTambien || false]
-        );
-
-        const { token, refreshToken } = generateTokens(result.insertId, role || 'Comprador');
-        await saveRefreshToken(result.insertId, refreshToken);
-
-        res.status(201).json({
-            success: true,
-            message: 'Usuario registrado exitosamente',
-            token,
-            refreshToken,
-            user: {
-                id: result.insertId,
-                role: role || 'Comprador',
-                numeroControl,
-                nombreCompleto,
-                carrera: carrera || null,
-                email: email || null,
-                telefono: telefono || null,
-                isVendedorTambien: isVendedorTambien || false
-            }
-        });
-    } catch (error) {
-        console.error('Error en registro:', error);
-        res.status(500).json({ success: false, message: 'Error en el servidor' });
-    }
-});
-
-// LOGIN
-router.post('/login', async (req, res) => {
-    const { numeroControl, password, codigoAcceso, role } = req.body;
-
-    try {
-        const [users] = await db.query(
-            'SELECT * FROM users WHERE numero_control = ? AND is_active = 1',
-            [numeroControl]
-        );
-
-        if (users.length === 0) {
-            return res.status(401).json({ success: false, message: 'Credenciales incorrectas' });
-        }
-
-        const user = users[0];
-
-        if (role === 'Administrador') {
-            if (user.role !== 'Administrador' || user.codigo_acceso !== codigoAcceso) {
-                return res.status(401).json({ success: false, message: 'Código de acceso incorrecto' });
-            }
-        } else {
-            const validPassword = await bcrypt.compare(password, user.password_hash);
-            if (!validPassword) {
-                return res.status(401).json({ success: false, message: 'Contraseña incorrecta' });
-            }
-            if (user.role !== role && user.role !== 'Administrador') {
-                return res.status(401).json({ success: false, message: `No tienes rol de ${role}` });
-            }
-        }
-
-        const { token, refreshToken } = generateTokens(user.id, user.role);
-        await saveRefreshToken(user.id, refreshToken);
-
-        res.json({
-            success: true,
-            token,
-            refreshToken,
-            user: {
-                id: user.id,
-                role: user.role,
-                numeroControl: user.numero_control,
-                nombreCompleto: user.nombre_completo,
-                carrera: user.carrera,
-                email: user.email,
-                telefono: user.telefono,
-                calificacion: parseFloat(user.calificacion) || 0,
-                totalVentas: user.total_ventas || 0,
-                totalCompras: user.total_compras || 0,
-                isVendedorTambien: user.is_vendedor_tambien === 1,
-                profileImage: user.profile_image,
-                direccion: user.direccion
-            }
-        });
-    } catch (error) {
-        console.error('Login error:', error);
-        res.status(500).json({ success: false, message: 'Error en el servidor' });
-    }
-});
-
-// REFRESH TOKEN
-router.post('/refresh', async (req, res) => {
-    const { refreshToken } = req.body;
-
-    if (!refreshToken) {
-        return res.status(401).json({ success: false, message: 'Refresh token requerido' });
-    }
-
-    try {
-        const [tokens] = await db.query(
-            'SELECT user_id FROM refresh_tokens WHERE token = ? AND expires_at > NOW()',
-            [refreshToken]
-        );
-
-        if (tokens.length === 0) {
-            return res.status(401).json({ success: false, message: 'Refresh token inválido o expirado' });
-        }
-
-        const decoded = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET);
-        const { token: newToken, refreshToken: newRefreshToken } = generateTokens(decoded.userId, decoded.role);
-
-        await db.query('DELETE FROM refresh_tokens WHERE token = ?', [refreshToken]);
-        await saveRefreshToken(decoded.userId, newRefreshToken);
-
-        res.json({ success: true, token: newToken, refreshToken: newRefreshToken });
-    } catch (error) {
-        res.status(401).json({ success: false, message: 'Refresh token inválido' });
-    }
-});
-
-// LOGOUT
-router.post('/logout', async (req, res) => {
-    const authHeader = req.headers['authorization'];
-    const token = authHeader && authHeader.split(' ')[1];
-
-    if (token) {
+        const { role, numeroControl, nombreCompleto, carrera, email, telefono, password, codigoAcceso, isVendedorTambien } = req.body;
+        
         try {
-            const decoded = jwt.decode(token);
-            if (decoded && decoded.userId) {
-                await db.query('DELETE FROM refresh_tokens WHERE user_id = ?', [decoded.userId]);
+            db.query('SELECT * FROM users WHERE numeroControl = ?', [numeroControl], async (err, results) => {
+                if (err) {
+                    console.error('Error en consulta:', err);
+                    return res.status(500).json({ message: 'Error en BD' });
+                }
+                if (results.length > 0) {
+                    return res.status(400).json({ message: 'El número de control ya está registrado' });
+                }
+                
+                const hashedPassword = password ? await bcrypt.hash(password, 10) : null;
+                
+                db.query(
+                    `INSERT INTO users (role, numeroControl, nombreCompleto, carrera, email, telefono, password, codigoAcceso, isVendedorTambien, isActive)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE)`,
+                    [role, numeroControl, nombreCompleto, carrera, email, telefono, hashedPassword, codigoAcceso, isVendedorTambien || false],
+                    (err, result) => {
+                        if (err) {
+                            console.error('Error insertando:', err);
+                            return res.status(500).json({ message: 'Error al registrar usuario' });
+                        }
+                        
+                        const token = jwt.sign(
+                            { userId: result.insertId, role },
+                            process.env.JWT_SECRET,
+                            { expiresIn: '7d' }
+                        );
+                        
+                        res.status(201).json({
+                            token,
+                            user: {
+                                id: result.insertId,
+                                role,
+                                numeroControl,
+                                nombreCompleto,
+                                email,
+                                carrera,
+                                telefono,
+                                isVendedorTambien: isVendedorTambien || false
+                            }
+                        });
+                    }
+                );
+            });
+        } catch (error) {
+            console.error('Error en registro:', error);
+            res.status(500).json({ message: 'Error en el servidor' });
+        }
+    });
+
+    // LOGIN
+    router.post('/login', (req, res) => {
+        console.log('🔐 Login:', req.body.numeroControl);
+        
+        const { numeroControl, password, codigoAcceso, role } = req.body;
+        
+        db.query('SELECT * FROM users WHERE numeroControl = ? AND isActive = TRUE', [numeroControl], async (err, users) => {
+            if (err) {
+                console.error('Error en login:', err);
+                return res.status(500).json({ message: 'Error en BD' });
             }
-        } catch (e) {}
-    }
+            
+            if (users.length === 0) {
+                return res.status(401).json({ message: 'Credenciales incorrectas' });
+            }
+            
+            const user = users[0];
+            
+            if (user.role !== role) {
+                return res.status(401).json({ message: 'Rol incorrecto' });
+            }
+            
+            let valido = false;
+            if (role === 'Administrador') {
+                valido = (user.codigoAcceso === codigoAcceso);
+            } else {
+                valido = await bcrypt.compare(password, user.password);
+            }
+            
+            if (!valido) {
+                return res.status(401).json({ message: 'Credenciales incorrectas' });
+            }
+            
+            const token = jwt.sign(
+                { userId: user.id, role: user.role },
+                process.env.JWT_SECRET,
+                { expiresIn: '7d' }
+            );
+            
+            res.json({
+                token,
+                user: {
+                    id: user.id,
+                    role: user.role,
+                    numeroControl: user.numeroControl,
+                    nombreCompleto: user.nombreCompleto,
+                    email: user.email,
+                    carrera: user.carrera,
+                    telefono: user.telefono,
+                    isVendedorTambien: user.isVendedorTambien,
+                    calificacion: user.calificacion || 0,
+                    totalVentas: user.totalVentas || 0,
+                    totalCompras: user.totalCompras || 0
+                }
+            });
+        });
+    });
 
-    res.json({ success: true, message: 'Sesión cerrada' });
-});
+    // LOGOUT
+    router.post('/logout', (req, res) => {
+        res.json({ message: 'Sesión cerrada' });
+    });
 
-module.exports = router;
+    // REFRESH TOKEN
+    router.post('/refresh', (req, res) => {
+        const { refreshToken } = req.body;
+        if (!refreshToken) {
+            return res.status(401).json({ message: 'No refresh token' });
+        }
+        
+        try {
+            const decoded = jwt.verify(refreshToken, process.env.JWT_SECRET);
+            const newToken = jwt.sign(
+                { userId: decoded.userId, role: decoded.role },
+                process.env.JWT_SECRET,
+                { expiresIn: '7d' }
+            );
+            res.json({ token: newToken });
+        } catch (e) {
+            res.status(401).json({ message: 'Refresh token inválido' });
+        }
+    });
+
+    return router;
+};

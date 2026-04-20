@@ -1,140 +1,129 @@
-const express = require('express');
-const db = require('../config/database');
-const { authenticateToken, isSeller } = require('../middleware/auth');
-const router = express.Router();
+const jwt = require('jsonwebtoken');
 
-// GET /api/orders
-router.get('/', authenticateToken, async (req, res) => {
-    const { status } = req.query;
+module.exports = (db) => {
+    const router = require('express').Router();
 
-    try {
-        let query = `
-            SELECT o.*, 
-                   (SELECT JSON_ARRAYAGG(
-                       JSON_OBJECT(
-                           'productId', oi.product_id,
-                           'productName', oi.product_name,
-                           'price', oi.price,
-                           'quantity', oi.quantity,
-                           'imageUrl', oi.image_url
-                       )
-                   ) FROM order_items oi WHERE oi.order_id = o.id) as items
-            FROM orders o
-            WHERE o.user_id = ?
-        `;
+    const verifyToken = (req, res, next) => {
+        const token = req.headers.authorization?.replace('Bearer ', '');
+        if (!token) {
+            return res.status(401).json({ message: 'No token provided' });
+        }
+        try {
+            const decoded = jwt.verify(token, process.env.JWT_SECRET);
+            req.userId = decoded.userId;
+            req.userRole = decoded.role;
+            next();
+        } catch (e) {
+            return res.status(401).json({ message: 'Invalid token' });
+        }
+    };
+
+    // POST /api/orders - Crear pedido
+    router.post('/', verifyToken, (req, res) => {
+        const { items, total, paymentMethod, shippingAddress } = req.body;
+        
+        db.query(
+            'INSERT INTO orders (userId, total, paymentMethod, shippingAddress, status, createdAt) VALUES (?, ?, ?, ?, ?, NOW())',
+            [req.userId, total, paymentMethod, shippingAddress, 'pending'],
+            (err, result) => {
+                if (err) {
+                    console.error('Error creando pedido:', err);
+                    return res.status(500).json({ message: 'Error al crear pedido' });
+                }
+                
+                const orderId = result.insertId;
+                const orderItems = items.map(item => [
+                    orderId, item.productId, item.name, item.quantity, item.price, item.imageUrl
+                ]);
+                
+                db.query(
+                    'INSERT INTO order_items (orderId, productId, productName, quantity, price, imageUrl) VALUES ?',
+                    [orderItems],
+                    (err) => {
+                        if (err) {
+                            console.error('Error creando items del pedido:', err);
+                            return res.status(500).json({ message: 'Error al crear items' });
+                        }
+                        
+                        db.query('DELETE FROM cart_items WHERE userId = ?', [req.userId]);
+                        res.status(201).json({ id: orderId, message: 'Pedido creado' });
+                    }
+                );
+            }
+        );
+    });
+
+    // GET /api/orders - Obtener pedidos del usuario
+    router.get('/', verifyToken, (req, res) => {
+        const { status } = req.query;
+        let query = 'SELECT * FROM orders WHERE userId = ?';
         const params = [req.userId];
-
+        
         if (status) {
-            query += ' AND o.status = ?';
+            query += ' AND status = ?';
             params.push(status);
         }
-
-        query += ' ORDER BY o.created_at DESC';
-
-        const [orders] = await db.query(query, params);
         
-        const parsedOrders = orders.map(o => ({
-            ...o,
-            items: o.items ? JSON.parse(o.items) : []
-        }));
+        query += ' ORDER BY createdAt DESC';
         
-        res.json({ orders: parsedOrders });
-    } catch (error) {
-        console.error('Error getting orders:', error);
-        res.status(500).json({ success: false, message: 'Error al obtener pedidos' });
-    }
-});
-
-// POST /api/orders
-router.post('/', authenticateToken, async (req, res) => {
-    const { items, total, paymentMethod, shippingAddress } = req.body;
-
-    const connection = await db.getConnection();
-    await connection.beginTransaction();
-
-    try {
-        for (const item of items) {
-            const [product] = await connection.query(
-                'SELECT stock, name, price, images FROM products WHERE id = ? AND is_available = 1',
-                [item.productId]
-            );
-            if (product.length === 0 || product[0].stock < item.quantity) {
-                throw new Error(`Stock insuficiente para ${item.name || 'producto'}`);
+        db.query(query, params, (err, orders) => {
+            if (err) {
+                console.error('Error obteniendo pedidos:', err);
+                return res.status(500).json({ message: 'Error' });
             }
-        }
-
-        const [order] = await connection.query(
-            `INSERT INTO orders (user_id, total, payment_method, shipping_address, status)
-             VALUES (?, ?, ?, ?, 'pending')`,
-            [req.userId, total, paymentMethod || 'Efectivo', shippingAddress || 'Entrega en ITESCO']
-        );
-
-        for (const item of items) {
-            const [product] = await connection.query(
-                'SELECT name, price, images FROM products WHERE id = ?',
-                [item.productId]
-            );
-
-            await connection.query(
-                `INSERT INTO order_items (order_id, product_id, product_name, price, quantity, image_url)
-                 VALUES (?, ?, ?, ?, ?, ?)`,
-                [order.insertId, item.productId, product[0].name, product[0].price, item.quantity, 
-                 product[0].images ? JSON.parse(product[0].images)[0] : null]
-            );
-
-            await connection.query(
-                'UPDATE products SET stock = stock - ? WHERE id = ?',
-                [item.quantity, item.productId]
-            );
-        }
-
-        await connection.query('DELETE FROM cart WHERE user_id = ?', [req.userId]);
-
-        await connection.commit();
-
-        res.status(201).json({
-            success: true,
-            message: 'Pedido creado exitosamente',
-            orderId: order.insertId
+            
+            // Obtener items para cada pedido
+            const promises = orders.map(order => {
+                return new Promise((resolve) => {
+                    db.query('SELECT * FROM order_items WHERE orderId = ?', [order.id], (err, items) => {
+                        order.items = items || [];
+                        resolve(order);
+                    });
+                });
+            });
+            
+            Promise.all(promises).then(ordersWithItems => {
+                res.json(ordersWithItems);
+            });
         });
-    } catch (error) {
-        await connection.rollback();
-        console.error('Error creating order:', error);
-        res.status(500).json({ success: false, message: error.message || 'Error al crear pedido' });
-    } finally {
-        connection.release();
-    }
-});
+    });
 
-// PATCH /api/orders/:orderId/status
-router.patch('/:orderId/status', authenticateToken, isSeller, async (req, res) => {
-    const { status } = req.body;
-    const validStatuses = ['pending', 'processing', 'shipped', 'delivered', 'cancelled'];
-
-    if (!validStatuses.includes(status)) {
-        return res.status(400).json({ success: false, message: 'Estado inválido' });
-    }
-
-    try {
-        const [order] = await db.query(
-            `SELECT o.* FROM orders o
-             JOIN order_items oi ON o.id = oi.order_id
-             JOIN products p ON oi.product_id = p.id
-             WHERE o.id = ? AND p.seller_id = ?`,
-            [req.params.orderId, req.userId]
+    // PATCH /api/orders/:orderId/status - Actualizar estado
+    router.patch('/:orderId/status', verifyToken, (req, res) => {
+        const { status } = req.body;
+        
+        db.query(
+            'UPDATE orders SET status = ?, updatedAt = NOW() WHERE id = ?',
+            [status, req.params.orderId],
+            (err) => {
+                if (err) {
+                    console.error('Error actualizando estado:', err);
+                    return res.status(500).json({ message: 'Error' });
+                }
+                res.json({ message: 'Estado actualizado' });
+            }
         );
+    });
 
-        if (order.length === 0 && req.userRole !== 'Administrador') {
-            return res.status(403).json({ success: false, message: 'No tienes permiso para modificar este pedido' });
-        }
+    // GET /api/sales - Ventas del vendedor
+    router.get('/sales', verifyToken, (req, res) => {
+        db.query(
+            `SELECT o.*, oi.productName, oi.quantity, oi.price
+             FROM orders o
+             JOIN order_items oi ON o.id = oi.orderId
+             JOIN products p ON oi.productId = p.id
+             WHERE p.sellerId = ?
+             ORDER BY o.createdAt DESC`,
+            [req.userId],
+            (err, sales) => {
+                if (err) {
+                    console.error('Error obteniendo ventas:', err);
+                    return res.status(500).json({ message: 'Error' });
+                }
+                res.json({ sales });
+            }
+        );
+    });
 
-        await db.query('UPDATE orders SET status = ? WHERE id = ?', [status, req.params.orderId]);
-
-        res.json({ success: true, message: 'Estado actualizado' });
-    } catch (error) {
-        console.error('Error updating order status:', error);
-        res.status(500).json({ success: false, message: 'Error al actualizar estado' });
-    }
-});
-
-module.exports = router;
+    return router;
+};

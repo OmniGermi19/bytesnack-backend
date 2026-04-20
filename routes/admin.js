@@ -1,26 +1,44 @@
-const express = require('express');
-const db = require('../config/database');
-const { authenticateToken, isAdmin } = require('../middleware/auth');
-const router = express.Router();
+const jwt = require('jsonwebtoken');
 
-// GET /api/admin/stats
-router.get('/stats', authenticateToken, isAdmin, async (req, res) => {
-    try {
-        const [totalUsers] = await db.query('SELECT COUNT(*) as count FROM users');
-        const [totalProducts] = await db.query('SELECT COUNT(*) as count FROM products WHERE is_available = 1');
-        const [totalOrders] = await db.query('SELECT COUNT(*) as count FROM orders');
-        const [totalSales] = await db.query('SELECT SUM(total) as total FROM orders WHERE status = "delivered"');
+module.exports = (db) => {
+    const router = require('express').Router();
 
-        res.json({
-            totalUsers: totalUsers[0].count,
-            totalProducts: totalProducts[0].count,
-            totalOrders: totalOrders[0].count,
-            totalSales: totalSales[0].total || 0
+    const verifyAdmin = (req, res, next) => {
+        const token = req.headers.authorization?.replace('Bearer ', '');
+        if (!token) {
+            return res.status(401).json({ message: 'No token provided' });
+        }
+        try {
+            const decoded = jwt.verify(token, process.env.JWT_SECRET);
+            if (decoded.role !== 'Administrador') {
+                return res.status(403).json({ message: 'Acceso denegado' });
+            }
+            next();
+        } catch (e) {
+            return res.status(401).json({ message: 'Invalid token' });
+        }
+    };
+
+    // GET /api/admin/stats - Estadísticas del sistema
+    router.get('/stats', verifyAdmin, (req, res) => {
+        Promise.all([
+            new Promise(resolve => db.query('SELECT COUNT(*) as total FROM users', (e, r) => resolve(r[0] || { total: 0 }))),
+            new Promise(resolve => db.query('SELECT COUNT(*) as total FROM users WHERE role = "Vendedor"', (e, r) => resolve(r[0] || { total: 0 }))),
+            new Promise(resolve => db.query('SELECT COUNT(*) as total FROM users WHERE role = "Comprador"', (e, r) => resolve(r[0] || { total: 0 }))),
+            new Promise(resolve => db.query('SELECT COUNT(*) as total FROM products', (e, r) => resolve(r[0] || { total: 0 }))),
+            new Promise(resolve => db.query('SELECT COUNT(*) as total FROM orders', (e, r) => resolve(r[0] || { total: 0 }))),
+            new Promise(resolve => db.query('SELECT COALESCE(SUM(total), 0) as total FROM orders WHERE status = "delivered"', (e, r) => resolve(r[0] || { total: 0 })))
+        ]).then(([totalUsers, totalSellers, totalBuyers, totalProducts, totalOrders, totalSales]) => {
+            res.json({
+                totalUsers: totalUsers.total,
+                totalSellers: totalSellers.total,
+                totalBuyers: totalBuyers.total,
+                totalProducts: totalProducts.total,
+                totalOrders: totalOrders.total,
+                totalSales: totalSales.total
+            });
         });
-    } catch (error) {
-        console.error('Error getting stats:', error);
-        res.status(500).json({ success: false, message: 'Error al obtener estadísticas' });
-    }
-});
+    });
 
-module.exports = router;
+    return router;
+};
