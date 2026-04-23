@@ -122,6 +122,9 @@ app.post('/api/auth/register', async (req, res) => {
             }
         }
 
+        // Compradores: isActive = true, Vendedores: isActive = false (pendiente aprobación)
+        const isActive = role === 'Comprador';
+
         const [result] = await promiseDb.query(
             `INSERT INTO users 
             (role, numeroControl, nombreCompleto, carrera, email, telefono, password, 
@@ -131,7 +134,7 @@ app.post('/api/auth/register', async (req, res) => {
                 role, numeroControl, nombreCompleto, carrera || null, email || null, 
                 telefono || null, hashedPassword, codigoAcceso || null,
                 credencialFotos ? JSON.stringify(credencialFotos) : null,
-                isVendedorTambien || false, true
+                isVendedorTambien || false, isActive
             ]
         );
 
@@ -179,7 +182,7 @@ app.post('/api/auth/login', async (req, res) => {
         const user = users[0];
 
         if (!user.isActive) {
-            return res.status(401).json({ message: 'Cuenta desactivada. Contacta al administrador.' });
+            return res.status(401).json({ message: 'Cuenta desactivada o pendiente de aprobación. Contacta al administrador.' });
         }
 
         if (user.role !== role) {
@@ -268,7 +271,7 @@ app.get('/api/products', async (req, res) => {
     });
 });
 
-app.get('/api/products/pending', authenticateToken, isAdmin, (req, res) => {
+app.get('/api/admin/pending-products', authenticateToken, isAdmin, (req, res) => {
     db.query(
         `SELECT p.*, u.nombreCompleto as sellerName, u.email as sellerEmail, u.numeroControl as sellerControl
          FROM products p
@@ -698,6 +701,23 @@ app.patch('/api/users/:userId/status', authenticateToken, isAdmin, (req, res) =>
             return res.status(500).json({ message: 'Error al actualizar estado' });
         }
         res.json({ message: `Usuario ${isActive ? 'activado' : 'desactivado'} correctamente` });
+    });
+});
+
+app.put('/api/users/:userId/role', authenticateToken, isAdmin, (req, res) => {
+    const { role } = req.body;
+    const validRoles = ['Comprador', 'Vendedor', 'Administrador'];
+    
+    if (!validRoles.includes(role)) {
+        return res.status(400).json({ message: 'Rol inválido' });
+    }
+
+    db.query('UPDATE users SET role = ? WHERE id = ?', [role, req.params.userId], (err) => {
+        if (err) {
+            console.error('Error actualizando rol:', err);
+            return res.status(500).json({ message: 'Error al actualizar rol' });
+        }
+        res.json({ message: 'Rol actualizado correctamente' });
     });
 });
 
