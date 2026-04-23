@@ -1,11 +1,11 @@
 const jwt = require('jsonwebtoken');
 
-const authenticateToken = async (req, res, next) => {
-    const authHeader = req.headers['authorization'];
-    const token = authHeader && authHeader.split(' ')[1];
+const authenticateToken = (req, res, next) => {
+    const authHeader = req.headers.authorization;
+    const token = authHeader && authHeader.replace('Bearer ', '');
 
     if (!token) {
-        return res.status(401).json({ success: false, message: 'Token no proporcionado' });
+        return res.status(401).json({ message: 'No se proporcionó token de autenticación' });
     }
 
     try {
@@ -15,32 +15,61 @@ const authenticateToken = async (req, res, next) => {
         next();
     } catch (error) {
         if (error.name === 'TokenExpiredError') {
-            return res.status(401).json({ success: false, message: 'Token expirado' });
+            return res.status(401).json({ message: 'Token expirado' });
         }
-        return res.status(403).json({ success: false, message: 'Token inválido' });
+        return res.status(403).json({ message: 'Token inválido' });
     }
 };
 
 const isAdmin = (req, res, next) => {
     if (req.userRole !== 'Administrador') {
-        return res.status(403).json({ success: false, message: 'Acceso denegado. Se requiere rol de Administrador' });
+        return res.status(403).json({ message: 'Acceso denegado. Se requieren permisos de administrador.' });
     }
     next();
 };
 
 const isSeller = (req, res, next) => {
     if (req.userRole !== 'Vendedor' && req.userRole !== 'Administrador') {
-        return res.status(403).json({ success: false, message: 'Acceso denegado. Se requiere rol de Vendedor' });
+        return res.status(403).json({ message: 'Acceso denegado. Se requieren permisos de vendedor.' });
+    }
+    next();
+};
+
+const isBuyer = (req, res, next) => {
+    if (req.userRole !== 'Comprador' && req.userRole !== 'Administrador') {
+        return res.status(403).json({ message: 'Acceso denegado. Se requieren permisos de comprador.' });
     }
     next();
 };
 
 const isOwnerOrAdmin = (req, res, next) => {
-    if (req.userRole === 'Administrador') return next();
-    if (req.params.userId && parseInt(req.params.userId) !== req.userId) {
-        return res.status(403).json({ success: false, message: 'No tienes permiso para acceder a este recurso' });
+    const resourceUserId = parseInt(req.params.userId) || req.body.userId;
+    if (req.userRole === 'Administrador' || req.userId === resourceUserId) {
+        return next();
     }
-    next();
+    return res.status(403).json({ message: 'No tienes permiso para acceder a este recurso' });
 };
 
-module.exports = { authenticateToken, isAdmin, isSeller, isOwnerOrAdmin };
+const canCreateProduct = (req, res, next) => {
+    if (req.userRole === 'Vendedor' || req.userRole === 'Administrador') {
+        return next();
+    }
+    return res.status(403).json({ message: 'Solo los vendedores pueden crear productos' });
+};
+
+const canApproveProduct = (req, res, next) => {
+    if (req.userRole === 'Administrador') {
+        return next();
+    }
+    return res.status(403).json({ message: 'Solo los administradores pueden aprobar productos' });
+};
+
+module.exports = {
+    authenticateToken,
+    isAdmin,
+    isSeller,
+    isBuyer,
+    isOwnerOrAdmin,
+    canCreateProduct,
+    canApproveProduct
+};

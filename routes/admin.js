@@ -1,43 +1,68 @@
-const jwt = require('jsonwebtoken');
+const express = require('express');
+const { authenticateToken, isAdmin } = require('../middleware/auth');
 
 module.exports = (db) => {
-    const router = require('express').Router();
+    const router = express.Router();
 
-    const verifyAdmin = (req, res, next) => {
-        const token = req.headers.authorization?.replace('Bearer ', '');
-        if (!token) {
-            return res.status(401).json({ message: 'No token provided' });
-        }
-        try {
-            const decoded = jwt.verify(token, process.env.JWT_SECRET);
-            if (decoded.role !== 'Administrador') {
-                return res.status(403).json({ message: 'Acceso denegado' });
+    // GET /api/admin/stats - Estadísticas generales
+    router.get('/stats', authenticateToken, isAdmin, (req, res) => {
+        const queries = {
+            totalUsers: 'SELECT COUNT(*) as count FROM users',
+            totalProducts: 'SELECT COUNT(*) as count FROM products WHERE status = "approved"',
+            pendingProducts: 'SELECT COUNT(*) as count FROM products WHERE status = "pending"',
+            totalOrders: 'SELECT COUNT(*) as count FROM orders',
+            totalSales: 'SELECT SUM(total) as total FROM orders WHERE status = "delivered"',
+            totalRevenue: 'SELECT SUM(total) as total FROM orders'
+        };
+
+        const results = {};
+
+        const executeQueries = () => {
+            let completed = 0;
+            const totalQueries = Object.keys(queries).length;
+
+            for (const [key, query] of Object.entries(queries)) {
+                db.query(query, (err, rows) => {
+                    if (err) {
+                        console.error(`Error obteniendo ${key}:`, err);
+                        results[key] = 0;
+                    } else {
+                        results[key] = rows[0]?.count || rows[0]?.total || 0;
+                    }
+                    
+                    completed++;
+                    if (completed === totalQueries) {
+                        res.json(results);
+                    }
+                });
             }
-            next();
-        } catch (e) {
-            return res.status(401).json({ message: 'Invalid token' });
-        }
-    };
+        };
 
-    // GET /api/admin/stats - Estadísticas del sistema
-    router.get('/stats', verifyAdmin, (req, res) => {
-        Promise.all([
-            new Promise(resolve => db.query('SELECT COUNT(*) as total FROM users', (e, r) => resolve(r[0] || { total: 0 }))),
-            new Promise(resolve => db.query('SELECT COUNT(*) as total FROM users WHERE role = "Vendedor"', (e, r) => resolve(r[0] || { total: 0 }))),
-            new Promise(resolve => db.query('SELECT COUNT(*) as total FROM users WHERE role = "Comprador"', (e, r) => resolve(r[0] || { total: 0 }))),
-            new Promise(resolve => db.query('SELECT COUNT(*) as total FROM products', (e, r) => resolve(r[0] || { total: 0 }))),
-            new Promise(resolve => db.query('SELECT COUNT(*) as total FROM orders', (e, r) => resolve(r[0] || { total: 0 }))),
-            new Promise(resolve => db.query('SELECT COALESCE(SUM(total), 0) as total FROM orders WHERE status = "delivered"', (e, r) => resolve(r[0] || { total: 0 })))
-        ]).then(([totalUsers, totalSellers, totalBuyers, totalProducts, totalOrders, totalSales]) => {
-            res.json({
-                totalUsers: totalUsers.total,
-                totalSellers: totalSellers.total,
-                totalBuyers: totalBuyers.total,
-                totalProducts: totalProducts.total,
-                totalOrders: totalOrders.total,
-                totalSales: totalSales.total
-            });
-        });
+        executeQueries();
+    });
+
+    // GET /api/admin/pending-products - Productos pendientes
+    router.get('/pending-products', authenticateToken, isAdmin, (req, res) => {
+        db.query(
+            `SELECT p.*, u.nombreCompleto as sellerName, u.email as sellerEmail, u.numeroControl as sellerControl
+             FROM products p
+             JOIN users u ON p.sellerId = u.id
+             WHERE p.status = 'pending'
+             ORDER BY p.createdAt ASC`,
+            (err, products) => {
+                if (err) {
+                    console.error('Error obteniendo productos pendientes:', err);
+                    return res.status(500).json({ message: 'Error al obtener productos pendientes' });
+                }
+                
+                const parsedProducts = products.map(p => ({
+                    ...p,
+                    images: typeof p.images === 'string' ? JSON.parse(p.images || '[]') : (p.images || [])
+                }));
+                
+                res.json(parsedProducts);
+            }
+        );
     });
 
     return router;

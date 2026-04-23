@@ -6,59 +6,61 @@ const dotenv = require('dotenv');
 dotenv.config();
 
 const app = express();
-app.use(cors());
-app.use(express.json());
 
-const PORT = process.env.PORT || 3000;
+app.use(cors({
+    origin: process.env.FRONTEND_URL || '*',
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
+}));
 
-// Configuración de MySQL
-const dbConfig = {
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+const db = mysql.createPool({
     host: process.env.DB_HOST,
     port: parseInt(process.env.DB_PORT) || 3306,
     user: process.env.DB_USER,
     password: process.env.DB_PASSWORD,
-    database: process.env.DB_NAME
-};
+    database: process.env.DB_NAME,
+    waitForConnections: true,
+    connectionLimit: 10,
+    queueLimit: 0,
+    enableKeepAlive: true,
+    keepAliveInitialDelay: 0
+});
 
-console.log('📡 Conectando a MySQL...');
-console.log(`   Host: ${dbConfig.host}:${dbConfig.port}`);
-console.log(`   Database: ${dbConfig.database}`);
-
-const db = mysql.createConnection(dbConfig);
-
-db.connect((err) => {
+db.getConnection((err, connection) => {
     if (err) {
-        console.error('❌ Error conectando a MySQL:', err.message);
+        console.error('Error de conexion a MySQL:', err.message);
         process.exit(1);
     }
-    console.log('✅ Conectado a MySQL correctamente');
+    console.log('Conectado a MySQL correctamente');
+    connection.release();
 });
 
-// Importar rutas
-const authRoutes = require('./routes/auth')(db);
-const productRoutes = require('./routes/products')(db);
-const cartRoutes = require('./routes/cart')(db);
-const orderRoutes = require('./routes/orders')(db);
-const userRoutes = require('./routes/users')(db);
-const adminRoutes = require('./routes/admin')(db);
-
-// Usar rutas
-app.use('/api/auth', authRoutes);
-app.use('/api/products', productRoutes);
-app.use('/api/cart', cartRoutes);
-app.use('/api/orders', orderRoutes);
-app.use('/api/users', userRoutes);
-app.use('/api/admin', adminRoutes);
-
-// Ruta de salud
-app.get('/api/health', (req, res) => {
-    res.json({ status: 'OK', message: 'Servidor funcionando correctamente' });
+app.use((err, req, res, next) => {
+    console.error('Error no manejado:', err);
+    res.status(500).json({ message: 'Error interno del servidor' });
 });
 
-app.get('/', (req, res) => {
-    res.json({ message: 'ByteSnack API funcionando' });
+app.use('/api/auth', require('./routes/auth')(db));
+app.use('/api/products', require('./routes/products')(db));
+app.use('/api/cart', require('./routes/cart')(db));
+app.use('/api/orders', require('./routes/orders')(db));
+app.use('/api/users', require('./routes/users')(db));
+app.use('/api/admin', require('./routes/admin')(db));
+app.use('/api/sales', require('./routes/sales')(db));
+
+app.get('/health', (req, res) => {
+    res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
+app.use('*', (req, res) => {
+    res.status(404).json({ message: `Ruta ${req.originalUrl} no encontrada` });
+});
+
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
+    console.log(`Servidor corriendo en puerto ${PORT}`);
 });
