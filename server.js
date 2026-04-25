@@ -10,7 +10,6 @@ dotenv.config();
 
 const app = express();
 
-// Middlewares
 app.use(cors({
     origin: process.env.FRONTEND_URL || '*',
     credentials: true,
@@ -21,34 +20,65 @@ app.use(cors({
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Configuración de email
+// Configuración de email - Versión mejorada
 let emailTransporter = null;
-if (process.env.EMAIL_USER && process.env.EMAIL_PASS) {
-    emailTransporter = nodemailer.createTransport({
-        service: 'gmail',
-        auth: {
-            user: process.env.EMAIL_USER,
-            pass: process.env.EMAIL_PASS
-        }
-    });
-    console.log('✅ Email configurado correctamente');
-} else {
-    console.log('⚠️ Email no configurado');
-}
 
-// Función para enviar correo
+const setupEmailTransporter = () => {
+    // Para Gmail
+    if (process.env.EMAIL_USER && process.env.EMAIL_PASS) {
+        emailTransporter = nodemailer.createTransport({
+            service: 'gmail',
+            auth: {
+                user: process.env.EMAIL_USER,
+                pass: process.env.EMAIL_PASS
+            },
+            tls: {
+                rejectUnauthorized: false
+            }
+        });
+        console.log('✅ Email configurado con Gmail');
+    }
+    // Para otros servicios (Outlook, etc.)
+    else if (process.env.EMAIL_HOST && process.env.EMAIL_PORT && process.env.EMAIL_USER && process.env.EMAIL_PASS) {
+        emailTransporter = nodemailer.createTransport({
+            host: process.env.EMAIL_HOST,
+            port: parseInt(process.env.EMAIL_PORT),
+            secure: process.env.EMAIL_SECURE === 'true',
+            auth: {
+                user: process.env.EMAIL_USER,
+                pass: process.env.EMAIL_PASS
+            }
+        });
+        console.log('✅ Email configurado con SMTP');
+    } else {
+        console.log('⚠️ Email no configurado. Las notificaciones no se enviarán');
+    }
+};
+
+setupEmailTransporter();
+
 const sendEmail = async (to, subject, html) => {
-    if (!emailTransporter) return false;
+    if (!emailTransporter) {
+        console.log('⚠️ Email no configurado, no se puede enviar correo a:', to);
+        return false;
+    }
+    
+    if (!to || to.trim() === '') {
+        console.log('⚠️ Destinatario de email vacío');
+        return false;
+    }
+    
     try {
-        await emailTransporter.sendMail({
+        const info = await emailTransporter.sendMail({
             from: `"ByteSnack ITESCO" <${process.env.EMAIL_USER}>`,
             to: to,
             subject: subject,
             html: html
         });
+        console.log(`✅ Correo enviado a ${to} - Message ID: ${info.messageId}`);
         return true;
     } catch (error) {
-        console.error('Error enviando correo:', error.message);
+        console.error('❌ Error enviando correo:', error.message);
         return false;
     }
 };
@@ -98,13 +128,6 @@ const authenticateToken = (req, res, next) => {
 
 const isAdmin = (req, res, next) => {
     if (req.userRole !== 'Administrador') {
-        return res.status(403).json({ message: 'Acceso denegado' });
-    }
-    next();
-};
-
-const isSeller = (req, res, next) => {
-    if (req.userRole !== 'Vendedor' && req.userRole !== 'Administrador') {
         return res.status(403).json({ message: 'Acceso denegado' });
     }
     next();
@@ -229,149 +252,7 @@ app.put('/api/admin/approve-product/:id', authenticateToken, isAdmin, (req, res)
     });
 });
 
-app.put('/api/products/:id', authenticateToken, (req, res) => {
-    const { name, price, description, images, stock, location, category, isAvailable } = req.body;
-    db.query('SELECT sellerId FROM products WHERE id = ?', [req.params.id], (err, products) => {
-        if (err || products.length === 0) return res.status(404).json({ message: 'Producto no encontrado' });
-        if (products[0].sellerId !== req.userId && req.userRole !== 'Administrador') return res.status(403).json({ message: 'No tienes permiso' });
-        db.query(`UPDATE products SET name = ?, price = ?, description = ?, images = ?, stock = ?, location = ?, category = ?, isAvailable = ?, updatedAt = NOW() WHERE id = ?`, [name, price, description, JSON.stringify(images || []), stock, location, category, isAvailable, req.params.id], (err) => {
-            if (err) return res.status(500).json({ message: 'Error al actualizar' });
-            res.json({ message: 'Producto actualizado' });
-        });
-    });
-});
-
-app.delete('/api/products/:id', authenticateToken, (req, res) => {
-    db.query('SELECT sellerId FROM products WHERE id = ?', [req.params.id], (err, products) => {
-        if (err || products.length === 0) return res.status(404).json({ message: 'Producto no encontrado' });
-        if (products[0].sellerId !== req.userId && req.userRole !== 'Administrador') return res.status(403).json({ message: 'No tienes permiso' });
-        db.query('DELETE FROM products WHERE id = ?', [req.params.id], (err) => {
-            if (err) return res.status(500).json({ message: 'Error al eliminar' });
-            res.json({ message: 'Producto eliminado' });
-        });
-    });
-});
-
-// ==================== RUTAS DE CARRITO ====================
-app.get('/api/cart', authenticateToken, (req, res) => {
-    db.query(`SELECT ci.*, p.name, p.price, p.images, p.sellerId, u.nombreCompleto as sellerName, p.stock as availableStock FROM cart_items ci JOIN products p ON ci.productId = p.id JOIN users u ON p.sellerId = u.id WHERE ci.userId = ?`, [req.userId], (err, items) => {
-        if (err) return res.status(500).json({ message: 'Error al obtener carrito' });
-        const formattedItems = items.map(item => ({ productId: item.productId.toString(), name: item.name, price: parseFloat(item.price), quantity: item.quantity, imageUrl: item.images ? (JSON.parse(item.images)[0] || null) : null, sellerId: item.sellerId.toString(), sellerName: item.sellerName, addedAt: item.addedAt }));
-        res.json({ items: formattedItems });
-    });
-});
-
-app.post('/api/cart/add', authenticateToken, (req, res) => {
-    const { productId, quantity } = req.body;
-    if (!productId || !quantity || quantity < 1) return res.status(400).json({ message: 'Datos inválidos' });
-    db.query('SELECT stock, status, isAvailable FROM products WHERE id = ?', [productId], (err, products) => {
-        if (err || products.length === 0) return res.status(404).json({ message: 'Producto no encontrado' });
-        const product = products[0];
-        if (product.status !== 'approved' || !product.isAvailable) return res.status(400).json({ message: 'Producto no disponible' });
-        if (product.stock < quantity) return res.status(400).json({ message: 'Stock insuficiente' });
-        db.query(`INSERT INTO cart_items (userId, productId, quantity, addedAt) VALUES (?, ?, ?, NOW()) ON DUPLICATE KEY UPDATE quantity = quantity + ?`, [req.userId, productId, quantity, quantity], (err) => {
-            if (err) return res.status(500).json({ message: 'Error al agregar al carrito' });
-            res.json({ message: 'Producto agregado al carrito' });
-        });
-    });
-});
-
-app.put('/api/cart/:productId', authenticateToken, (req, res) => {
-    const { quantity } = req.body;
-    const productId = req.params.productId;
-    if (quantity === undefined || quantity < 0) return res.status(400).json({ message: 'Cantidad inválida' });
-    if (quantity === 0) {
-        db.query('DELETE FROM cart_items WHERE userId = ? AND productId = ?', [req.userId, productId], (err) => {
-            if (err) return res.status(500).json({ message: 'Error al actualizar' });
-            res.json({ message: 'Producto eliminado del carrito' });
-        });
-    } else {
-        db.query('SELECT stock FROM products WHERE id = ?', [productId], (err, products) => {
-            if (err || products.length === 0) return res.status(404).json({ message: 'Producto no encontrado' });
-            if (products[0].stock < quantity) return res.status(400).json({ message: 'Stock insuficiente' });
-            db.query('UPDATE cart_items SET quantity = ? WHERE userId = ? AND productId = ?', [quantity, req.userId, productId], (err) => {
-                if (err) return res.status(500).json({ message: 'Error al actualizar' });
-                res.json({ message: 'Cantidad actualizada' });
-            });
-        });
-    }
-});
-
-app.delete('/api/cart/:productId', authenticateToken, (req, res) => {
-    db.query('DELETE FROM cart_items WHERE userId = ? AND productId = ?', [req.userId, req.params.productId], (err) => {
-        if (err) return res.status(500).json({ message: 'Error al eliminar' });
-        res.json({ message: 'Producto eliminado del carrito' });
-    });
-});
-
-app.delete('/api/cart/clear', authenticateToken, (req, res) => {
-    db.query('DELETE FROM cart_items WHERE userId = ?', [req.userId], (err) => {
-        if (err) return res.status(500).json({ message: 'Error al vaciar carrito' });
-        res.json({ message: 'Carrito vaciado' });
-    });
-});
-
-// ==================== RUTAS DE PEDIDOS ====================
-app.post('/api/orders', authenticateToken, async (req, res) => {
-    const { items, total, paymentMethod, shippingAddress } = req.body;
-    if (!items || items.length === 0) return res.status(400).json({ message: 'El carrito está vacío' });
-    try {
-        for (const item of items) {
-            const [products] = await promiseDb.query('SELECT stock FROM products WHERE id = ? AND status = "approved" AND isAvailable = TRUE', [item.productId]);
-            if (products.length === 0 || products[0].stock < item.quantity) return res.status(400).json({ message: `Stock insuficiente para ${item.name}` });
-        }
-        const [orderResult] = await promiseDb.query(`INSERT INTO orders (userId, total, paymentMethod, shippingAddress, status, createdAt, updatedAt) VALUES (?, ?, ?, ?, 'pending', NOW(), NOW())`, [req.userId, total, paymentMethod, shippingAddress]);
-        const orderId = orderResult.insertId;
-        const orderItems = items.map(item => [orderId, item.productId, item.name, item.quantity, item.price, item.imageUrl]);
-        await promiseDb.query('INSERT INTO order_items (orderId, productId, productName, quantity, price, imageUrl) VALUES ?', [orderItems]);
-        for (const item of items) await promiseDb.query('UPDATE products SET stock = stock - ? WHERE id = ?', [item.quantity, item.productId]);
-        await promiseDb.query('DELETE FROM cart_items WHERE userId = ?', [req.userId]);
-        res.status(201).json({ id: orderId, message: 'Pedido creado exitosamente' });
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ message: 'Error al crear pedido' });
-    }
-});
-
-app.get('/api/orders', authenticateToken, (req, res) => {
-    const { status } = req.query;
-    let query = 'SELECT * FROM orders WHERE userId = ?';
-    const params = [req.userId];
-    if (status) { query += ' AND status = ?'; params.push(status); }
-    query += ' ORDER BY createdAt DESC';
-    db.query(query, params, async (err, orders) => {
-        if (err) return res.status(500).json({ message: 'Error al obtener pedidos' });
-        for (const order of orders) {
-            const [items] = await promiseDb.query('SELECT * FROM order_items WHERE orderId = ?', [order.id]);
-            order.items = items;
-        }
-        res.json(orders);
-    });
-});
-
-app.patch('/api/orders/:orderId/status', authenticateToken, async (req, res) => {
-    const { status } = req.body;
-    const validStatuses = ['pending', 'processing', 'shipped', 'delivered', 'cancelled'];
-    if (!validStatuses.includes(status)) return res.status(400).json({ message: 'Estado inválido' });
-    try {
-        await promiseDb.query('UPDATE orders SET status = ?, updatedAt = NOW() WHERE id = ?', [status, req.params.orderId]);
-        res.json({ message: 'Estado actualizado correctamente' });
-    } catch (error) {
-        res.status(500).json({ message: 'Error al actualizar estado' });
-    }
-});
-
-// ==================== RUTAS DE VENTAS ====================
-app.get('/api/sales', authenticateToken, isSeller, (req, res) => {
-    db.query(`SELECT o.*, oi.productName, oi.quantity, oi.price, oi.imageUrl, u.nombreCompleto as buyerName FROM orders o JOIN order_items oi ON o.id = oi.orderId JOIN products p ON oi.productId = p.id JOIN users u ON o.userId = u.id WHERE p.sellerId = ? ORDER BY o.createdAt DESC`, [req.userId], (err, sales) => {
-        if (err) return res.status(500).json({ message: 'Error al obtener ventas' });
-        const totalSales = sales.reduce((sum, s) => sum + (parseFloat(s.price) * s.quantity), 0);
-        const totalOrders = [...new Set(sales.map(s => s.id))].length;
-        res.json({ sales, totalSales, totalOrders });
-    });
-});
-
-// ==================== RUTAS DE ADMINISTRACIÓN ====================
+// ==================== RUTAS DE ADMIN - VENDEDORES ====================
 app.get('/api/admin/pending-vendors', authenticateToken, isAdmin, (req, res) => {
     db.query(`SELECT id, role, numeroControl, nombreCompleto, carrera, email, telefono, credencialFotos, createdAt, isActive FROM users WHERE role = 'Vendedor' AND isActive = FALSE ORDER BY createdAt ASC`, (err, vendors) => {
         if (err) return res.status(500).json({ message: 'Error' });
@@ -382,25 +263,114 @@ app.get('/api/admin/pending-vendors', authenticateToken, isAdmin, (req, res) => 
 
 app.post('/api/admin/approve-vendor', authenticateToken, isAdmin, async (req, res) => {
     const { userId, approved, rejectionReason } = req.body;
+
     try {
         await promiseDb.query('UPDATE users SET isActive = ? WHERE id = ?', [approved, userId]);
+        
         const [vendors] = await promiseDb.query('SELECT email, nombreCompleto, numeroControl FROM users WHERE id = ?', [userId]);
         const vendor = vendors[0];
+        
         if (approved) {
-            await promiseDb.query(`INSERT INTO notifications (userId, title, body, type, isRead, createdAt) VALUES (?, ?, ?, ?, FALSE, NOW())`, [userId, '✅ Cuenta aprobada', 'Tu cuenta de vendedor ha sido aprobada. ¡Ya puedes iniciar sesión!', 'user_approval']);
+            await promiseDb.query(
+                `INSERT INTO notifications (userId, title, body, type, isRead, createdAt)
+                 VALUES (?, ?, ?, ?, FALSE, NOW())`,
+                [userId, '✅ Cuenta aprobada', 'Tu cuenta de vendedor ha sido aprobada. ¡Ya puedes iniciar sesión y publicar productos!', 'user_approval']
+            );
+            
             if (vendor && vendor.email) {
-                await sendEmail(vendor.email, '✅ Tu cuenta ha sido aprobada', `<h1>Bienvenido ${vendor.nombreCompleto}</h1><p>Tu cuenta ha sido aprobada. Número de control: ${vendor.numeroControl}</p>`);
+                const emailHtml = `
+                    <!DOCTYPE html>
+                    <html>
+                    <head><meta charset="UTF-8"><title>Cuenta Aprobada</title></head>
+                    <body style="font-family: Arial, sans-serif; background-color: #f4f4f4; padding: 20px;">
+                        <div style="max-width: 600px; margin: 0 auto; background: white; border-radius: 10px; padding: 30px;">
+                            <h1 style="color: #4CAF50;">✅ ¡Cuenta Aprobada!</h1>
+                            <p>Hola <strong>${vendor.nombreCompleto}</strong>,</p>
+                            <p>Tu cuenta de <strong>VENDEDOR</strong> ha sido aprobada exitosamente.</p>
+                            <div style="background: #f9f9f9; padding: 15px; border-radius: 8px; margin: 20px 0;">
+                                <p><strong>📋 Tus credenciales:</strong></p>
+                                <p>🔑 Número de control: <strong>${vendor.numeroControl}</strong></p>
+                                <p>🔒 Contraseña: La que configuraste al registrarte</p>
+                            </div>
+                            <p>Ya puedes iniciar sesión y comenzar a publicar tus productos.</p>
+                            <hr style="margin: 20px 0;">
+                            <p style="font-size: 12px; color: #888;">ByteSnack ITESCO</p>
+                        </div>
+                    </body>
+                    </html>
+                `;
+                await sendEmail(vendor.email, '✅ Tu cuenta de Vendedor ha sido aprobada', emailHtml);
+                console.log(`Correo de aprobación enviado a: ${vendor.email}`);
             }
-            res.json({ message: 'Vendedor aprobado' });
+            res.json({ message: 'Vendedor aprobado exitosamente' });
         } else {
-            await promiseDb.query(`INSERT INTO notifications (userId, title, body, type, isRead, createdAt) VALUES (?, ?, ?, ?, FALSE, NOW())`, [userId, '❌ Cuenta rechazada', `Tu cuenta ha sido rechazada. Motivo: ${rejectionReason || 'No especificado'}`, 'user_approval']);
+            await promiseDb.query(
+                `INSERT INTO notifications (userId, title, body, type, isRead, createdAt)
+                 VALUES (?, ?, ?, ?, FALSE, NOW())`,
+                [userId, '❌ Cuenta rechazada', `Tu cuenta ha sido rechazada. Motivo: ${rejectionReason || 'No especificado'}`, 'user_approval']
+            );
+            if (vendor && vendor.email) {
+                const emailHtml = `
+                    <!DOCTYPE html>
+                    <html>
+                    <head><meta charset="UTF-8"><title>Cuenta Rechazada</title></head>
+                    <body style="font-family: Arial, sans-serif; background-color: #f4f4f4; padding: 20px;">
+                        <div style="max-width: 600px; margin: 0 auto; background: white; border-radius: 10px; padding: 30px;">
+                            <h1 style="color: #f44336;">❌ Cuenta Rechazada</h1>
+                            <p>Hola <strong>${vendor.nombreCompleto}</strong>,</p>
+                            <p>Tu solicitud de cuenta de vendedor ha sido rechazada.</p>
+                            <div style="background: #fff3f3; padding: 15px; border-radius: 8px; margin: 20px 0;">
+                                <p><strong>📝 Motivo:</strong> ${rejectionReason || 'No especificado'}</p>
+                            </div>
+                            <p>Puedes volver a intentar el registro corrigiendo la información.</p>
+                            <hr style="margin: 20px 0;">
+                            <p style="font-size: 12px; color: #888;">ByteSnack ITESCO</p>
+                        </div>
+                    </body>
+                    </html>
+                `;
+                await sendEmail(vendor.email, '❌ Actualización sobre tu solicitud', emailHtml);
+                console.log(`Correo de rechazo enviado a: ${vendor.email}`);
+            }
             res.json({ message: 'Vendedor rechazado' });
         }
     } catch (error) {
-        res.status(500).json({ message: 'Error al procesar' });
+        console.error('Error aprobando vendedor:', error);
+        res.status(500).json({ message: 'Error al procesar la solicitud' });
     }
 });
 
+// ==================== RUTAS DE USUARIOS ====================
+app.get('/api/users', authenticateToken, isAdmin, (req, res) => {
+    db.query(`SELECT id, role, numeroControl, nombreCompleto, carrera, email, telefono, isVendedorTambien, createdAt, isActive, calificacion, totalVentas, totalCompras FROM users ORDER BY createdAt DESC`, (err, users) => {
+        if (err) {
+            console.error('Error obteniendo usuarios:', err);
+            return res.status(500).json({ message: 'Error al obtener usuarios' });
+        }
+        res.json(users);
+    });
+});
+
+app.patch('/api/users/:userId/status', authenticateToken, isAdmin, (req, res) => {
+    const { isActive } = req.body;
+    if (parseInt(req.params.userId) === req.userId) return res.status(400).json({ message: 'No puedes desactivar tu propia cuenta' });
+    db.query('UPDATE users SET isActive = ? WHERE id = ?', [isActive, req.params.userId], (err) => {
+        if (err) return res.status(500).json({ message: 'Error' });
+        res.json({ message: `Usuario ${isActive ? 'activado' : 'desactivado'}` });
+    });
+});
+
+app.put('/api/users/:userId/role', authenticateToken, isAdmin, (req, res) => {
+    const { role } = req.body;
+    const validRoles = ['Comprador', 'Vendedor', 'Administrador'];
+    if (!validRoles.includes(role)) return res.status(400).json({ message: 'Rol inválido' });
+    db.query('UPDATE users SET role = ? WHERE id = ?', [role, req.params.userId], (err) => {
+        if (err) return res.status(500).json({ message: 'Error' });
+        res.json({ message: 'Rol actualizado' });
+    });
+});
+
+// ==================== RUTAS DE ESTADÍSTICAS ====================
 app.get('/api/admin/user-stats', authenticateToken, isAdmin, (req, res) => {
     const queries = {
         totalVendedores: 'SELECT COUNT(*) as count FROM users WHERE role = "Vendedor" AND isActive = TRUE',
@@ -411,13 +381,13 @@ app.get('/api/admin/user-stats', authenticateToken, isAdmin, (req, res) => {
     };
     const results = {};
     let completed = 0;
-    const totalQueries = Object.keys(queries).length;
+    const total = Object.keys(queries).length;
     for (const [key, query] of Object.entries(queries)) {
         db.query(query, (err, rows) => {
             if (err) results[key] = 0;
             else results[key] = rows[0]?.count || 0;
             completed++;
-            if (completed === totalQueries) res.json(results);
+            if (completed === total) res.json(results);
         });
     }
 });
@@ -432,31 +402,15 @@ app.get('/api/admin/stats', authenticateToken, isAdmin, (req, res) => {
     };
     const results = {};
     let completed = 0;
-    const totalQueries = Object.keys(queries).length;
+    const total = Object.keys(queries).length;
     for (const [key, query] of Object.entries(queries)) {
         db.query(query, (err, rows) => {
             if (err) results[key] = 0;
             else results[key] = rows[0]?.count || rows[0]?.total || 0;
             completed++;
-            if (completed === totalQueries) res.json(results);
+            if (completed === total) res.json(results);
         });
     }
-});
-
-app.get('/api/users', authenticateToken, isAdmin, (req, res) => {
-    db.query(`SELECT id, role, numeroControl, nombreCompleto, carrera, email, telefono, isVendedorTambien, createdAt, isActive, calificacion, totalVentas, totalCompras FROM users ORDER BY createdAt DESC`, (err, users) => {
-        if (err) return res.status(500).json({ message: 'Error' });
-        res.json(users);
-    });
-});
-
-app.patch('/api/users/:userId/status', authenticateToken, isAdmin, (req, res) => {
-    const { isActive } = req.body;
-    if (parseInt(req.params.userId) === req.userId) return res.status(400).json({ message: 'No puedes desactivar tu propia cuenta' });
-    db.query('UPDATE users SET isActive = ? WHERE id = ?', [isActive, req.params.userId], (err) => {
-        if (err) return res.status(500).json({ message: 'Error' });
-        res.json({ message: `Usuario ${isActive ? 'activado' : 'desactivado'}` });
-    });
 });
 
 // ==================== RUTAS DE NOTIFICACIONES ====================
@@ -464,6 +418,27 @@ app.get('/api/notifications', authenticateToken, (req, res) => {
     db.query('SELECT * FROM notifications WHERE userId = ? ORDER BY createdAt DESC', [req.userId], (err, notifications) => {
         if (err) return res.status(500).json({ message: 'Error' });
         res.json({ notifications });
+    });
+});
+
+app.patch('/api/notifications/:id/read', authenticateToken, (req, res) => {
+    db.query('UPDATE notifications SET isRead = 1 WHERE id = ? AND userId = ?', [req.params.id, req.userId], (err) => {
+        if (err) return res.status(500).json({ message: 'Error' });
+        res.json({ message: 'Notificación marcada como leída' });
+    });
+});
+
+app.patch('/api/notifications/read-all', authenticateToken, (req, res) => {
+    db.query('UPDATE notifications SET isRead = 1 WHERE userId = ?', [req.userId], (err) => {
+        if (err) return res.status(500).json({ message: 'Error' });
+        res.json({ message: 'Todas marcadas como leídas' });
+    });
+});
+
+app.delete('/api/notifications/:id', authenticateToken, (req, res) => {
+    db.query('DELETE FROM notifications WHERE id = ? AND userId = ?', [req.params.id, req.userId], (err) => {
+        if (err) return res.status(500).json({ message: 'Error' });
+        res.json({ message: 'Notificación eliminada' });
     });
 });
 
@@ -478,17 +453,79 @@ app.post('/api/notifications/product-pending', authenticateToken, (req, res) => 
     });
 });
 
-app.patch('/api/notifications/:id/read', authenticateToken, (req, res) => {
-    db.query('UPDATE notifications SET isRead = 1 WHERE id = ? AND userId = ?', [req.params.id, req.userId], (err) => {
+// ==================== RUTAS DE CARRITO Y PEDIDOS ====================
+app.get('/api/cart', authenticateToken, (req, res) => {
+    db.query(`SELECT ci.*, p.name, p.price, p.images, p.sellerId, u.nombreCompleto as sellerName FROM cart_items ci JOIN products p ON ci.productId = p.id JOIN users u ON p.sellerId = u.id WHERE ci.userId = ?`, [req.userId], (err, items) => {
         if (err) return res.status(500).json({ message: 'Error' });
-        res.json({ message: 'Notificación marcada como leída' });
+        res.json({ items: items || [] });
     });
 });
 
-app.delete('/api/notifications/:id', authenticateToken, (req, res) => {
-    db.query('DELETE FROM notifications WHERE id = ? AND userId = ?', [req.params.id, req.userId], (err) => {
+app.post('/api/cart/add', authenticateToken, (req, res) => {
+    const { productId, quantity } = req.body;
+    if (!productId || quantity < 1) return res.status(400).json({ message: 'Datos inválidos' });
+    db.query(`INSERT INTO cart_items (userId, productId, quantity, addedAt) VALUES (?, ?, ?, NOW()) ON DUPLICATE KEY UPDATE quantity = quantity + ?`, [req.userId, productId, quantity, quantity], (err) => {
         if (err) return res.status(500).json({ message: 'Error' });
-        res.json({ message: 'Notificación eliminada' });
+        res.json({ message: 'Producto agregado' });
+    });
+});
+
+app.put('/api/cart/:productId', authenticateToken, (req, res) => {
+    const { quantity } = req.body;
+    if (quantity === 0) {
+        db.query('DELETE FROM cart_items WHERE userId = ? AND productId = ?', [req.userId, req.params.productId], (err) => {
+            if (err) return res.status(500).json({ message: 'Error' });
+            res.json({ message: 'Producto eliminado' });
+        });
+    } else {
+        db.query('UPDATE cart_items SET quantity = ? WHERE userId = ? AND productId = ?', [quantity, req.userId, req.params.productId], (err) => {
+            if (err) return res.status(500).json({ message: 'Error' });
+            res.json({ message: 'Cantidad actualizada' });
+        });
+    }
+});
+
+app.delete('/api/cart/:productId', authenticateToken, (req, res) => {
+    db.query('DELETE FROM cart_items WHERE userId = ? AND productId = ?', [req.userId, req.params.productId], (err) => {
+        if (err) return res.status(500).json({ message: 'Error' });
+        res.json({ message: 'Producto eliminado' });
+    });
+});
+
+app.post('/api/orders', authenticateToken, async (req, res) => {
+    const { items, total, paymentMethod, shippingAddress } = req.body;
+    if (!items || items.length === 0) return res.status(400).json({ message: 'Carrito vacío' });
+    try {
+        const [orderResult] = await promiseDb.query(`INSERT INTO orders (userId, total, paymentMethod, shippingAddress, status, createdAt) VALUES (?, ?, ?, ?, 'pending', NOW())`, [req.userId, total, paymentMethod, shippingAddress]);
+        const orderId = orderResult.insertId;
+        const orderItems = items.map(item => [orderId, item.productId, item.name, item.quantity, item.price, item.imageUrl]);
+        await promiseDb.query('INSERT INTO order_items (orderId, productId, productName, quantity, price, imageUrl) VALUES ?', [orderItems]);
+        await promiseDb.query('DELETE FROM cart_items WHERE userId = ?', [req.userId]);
+        res.status(201).json({ id: orderId, message: 'Pedido creado' });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: 'Error al crear pedido' });
+    }
+});
+
+app.get('/api/orders', authenticateToken, (req, res) => {
+    db.query('SELECT * FROM orders WHERE userId = ? ORDER BY createdAt DESC', [req.userId], async (err, orders) => {
+        if (err) return res.status(500).json({ message: 'Error' });
+        for (const order of orders) {
+            const [items] = await promiseDb.query('SELECT * FROM order_items WHERE orderId = ?', [order.id]);
+            order.items = items;
+        }
+        res.json(orders);
+    });
+});
+
+app.get('/api/sales', authenticateToken, (req, res) => {
+    if (req.userRole !== 'Administrador' && req.userRole !== 'Vendedor') {
+        return res.status(403).json({ message: 'Acceso denegado' });
+    }
+    db.query(`SELECT o.*, oi.productName, oi.quantity, oi.price, u.nombreCompleto as buyerName FROM orders o JOIN order_items oi ON o.id = oi.orderId JOIN products p ON oi.productId = p.id JOIN users u ON o.userId = u.id WHERE p.sellerId = ? ORDER BY o.createdAt DESC`, [req.userId], (err, sales) => {
+        if (err) return res.status(500).json({ message: 'Error' });
+        res.json({ sales });
     });
 });
 
