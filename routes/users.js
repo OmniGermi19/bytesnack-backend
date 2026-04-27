@@ -6,23 +6,22 @@ module.exports = (db) => {
     const router = express.Router();
 
     // GET /api/users/profile - Obtener perfil propio
-    router.get('/profile', authenticateToken, (req, res) => {
-        db.query(
-            `SELECT id, role, numeroControl, nombreCompleto, carrera, email, telefono, 
-                    isVendedorTambien, createdAt, isActive, calificacion, totalVentas, totalCompras, direccion
-             FROM users WHERE id = ?`,
-            [req.userId],
-            (err, users) => {
-                if (err) {
-                    console.error('Error obteniendo perfil:', err);
-                    return res.status(500).json({ message: 'Error al obtener perfil' });
-                }
-                if (users.length === 0) {
-                    return res.status(404).json({ message: 'Usuario no encontrado' });
-                }
-                res.json(users[0]);
+    router.get('/profile', authenticateToken, async (req, res) => {
+        try {
+            const [users] = await db.query(
+                `SELECT id, role, numeroControl, nombreCompleto, carrera, email, telefono, 
+                        isVendedorTambien, createdAt, isActive, calificacion, totalVentas, totalCompras, direccion
+                 FROM users WHERE id = ?`,
+                [req.userId]
+            );
+            if (users.length === 0) {
+                return res.status(404).json({ message: 'Usuario no encontrado' });
             }
-        );
+            res.json(users[0]);
+        } catch (error) {
+            console.error('Error obteniendo perfil:', error);
+            res.status(500).json({ message: 'Error al obtener perfil' });
+        }
     });
 
     // PUT /api/users/profile - Actualizar perfil
@@ -67,33 +66,32 @@ module.exports = (db) => {
         updates.push('updatedAt = NOW()');
         params.push(req.userId);
         
-        db.query(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`, params, (err) => {
-            if (err) {
-                console.error('Error actualizando perfil:', err);
-                return res.status(500).json({ message: 'Error al actualizar perfil' });
-            }
+        try {
+            await db.query(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`, params);
             res.json({ message: 'Perfil actualizado correctamente' });
-        });
+        } catch (error) {
+            console.error('Error actualizando perfil:', error);
+            res.status(500).json({ message: 'Error al actualizar perfil' });
+        }
     });
 
     // GET /api/users - Obtener todos los usuarios (solo admin)
-    router.get('/', authenticateToken, isAdmin, (req, res) => {
-        db.query(
-            `SELECT id, role, numeroControl, nombreCompleto, carrera, email, telefono, 
-                    isVendedorTambien, createdAt, isActive, calificacion, totalVentas, totalCompras
-             FROM users ORDER BY createdAt DESC`,
-            (err, users) => {
-                if (err) {
-                    console.error('Error obteniendo usuarios:', err);
-                    return res.status(500).json({ message: 'Error al obtener usuarios' });
-                }
-                res.json(users);
-            }
-        );
+    router.get('/', authenticateToken, isAdmin, async (req, res) => {
+        try {
+            const [users] = await db.query(
+                `SELECT id, role, numeroControl, nombreCompleto, carrera, email, telefono, 
+                        isVendedorTambien, createdAt, isActive, calificacion, totalVentas, totalCompras
+                 FROM users ORDER BY createdAt DESC`
+            );
+            res.json(users);
+        } catch (error) {
+            console.error('Error obteniendo usuarios:', error);
+            res.status(500).json({ message: 'Error al obtener usuarios' });
+        }
     });
 
     // PATCH /api/users/:userId/status - Cambiar estado de usuario (solo admin)
-    router.patch('/:userId/status', authenticateToken, isAdmin, (req, res) => {
+    router.patch('/:userId/status', authenticateToken, isAdmin, async (req, res) => {
         const { isActive } = req.body;
         const userId = req.params.userId;
 
@@ -101,21 +99,17 @@ module.exports = (db) => {
             return res.status(400).json({ message: 'No puedes desactivar tu propia cuenta' });
         }
 
-        db.query(
-            'UPDATE users SET isActive = ? WHERE id = ?',
-            [isActive, userId],
-            (err) => {
-                if (err) {
-                    console.error('Error actualizando estado:', err);
-                    return res.status(500).json({ message: 'Error al actualizar estado' });
-                }
-                res.json({ message: `Usuario ${isActive ? 'activado' : 'desactivado'} correctamente` });
-            }
-        );
+        try {
+            await db.query('UPDATE users SET isActive = ? WHERE id = ?', [isActive, userId]);
+            res.json({ message: `Usuario ${isActive ? 'activado' : 'desactivado'} correctamente` });
+        } catch (error) {
+            console.error('Error actualizando estado:', error);
+            res.status(500).json({ message: 'Error al actualizar estado' });
+        }
     });
 
     // PUT /api/users/:userId/role - Cambiar rol (solo admin)
-    router.put('/:userId/role', authenticateToken, isAdmin, (req, res) => {
+    router.put('/:userId/role', authenticateToken, isAdmin, async (req, res) => {
         const { role } = req.body;
         const validRoles = ['Comprador', 'Vendedor', 'Administrador'];
         
@@ -123,13 +117,13 @@ module.exports = (db) => {
             return res.status(400).json({ message: 'Rol inválido' });
         }
 
-        db.query('UPDATE users SET role = ? WHERE id = ?', [role, req.params.userId], (err) => {
-            if (err) {
-                console.error('Error actualizando rol:', err);
-                return res.status(500).json({ message: 'Error al actualizar rol' });
-            }
+        try {
+            await db.query('UPDATE users SET role = ? WHERE id = ?', [role, req.params.userId]);
             res.json({ message: 'Rol actualizado correctamente' });
-        });
+        } catch (error) {
+            console.error('Error actualizando rol:', error);
+            res.status(500).json({ message: 'Error al actualizar rol' });
+        }
     });
 
     return router;

@@ -20,22 +20,30 @@ module.exports = (db) => {
             isVendedorTambien
         } = req.body;
 
-        // Validaciones
+        // Validaciones de formato de número de control
+        if (role === 'Vendedor') {
+            const vendedorRegex = /^\d{8}V$/i;
+            if (!vendedorRegex.test(numeroControl)) {
+                return res.status(400).json({ message: 'Formato inválido: 8 dígitos + V (ej: 20241234V)' });
+            }
+        } else if (role === 'Comprador') {
+            const compradorRegex = /^\d{8}C$/i;
+            if (!compradorRegex.test(numeroControl)) {
+                return res.status(400).json({ message: 'Formato inválido: 8 dígitos + C (ej: 20241234C)' });
+            }
+        }
+
         if (!numeroControl || !nombreCompleto || !role) {
             return res.status(400).json({ message: 'Faltan campos requeridos' });
         }
 
-        if (role === 'Vendedor' && !password) {
-            return res.status(400).json({ message: 'La contraseña es requerida para vendedores' });
-        }
-
-        if (role === 'Comprador' && !password) {
+        if ((role === 'Vendedor' || role === 'Comprador') && !password) {
             return res.status(400).json({ message: 'La contraseña es requerida' });
         }
 
         try {
             // Verificar si el usuario ya existe
-            const [existing] = await db.promise().query(
+            const [existing] = await db.query(
                 'SELECT id FROM users WHERE numeroControl = ?',
                 [numeroControl]
             );
@@ -44,9 +52,12 @@ module.exports = (db) => {
                 return res.status(400).json({ message: 'El número de control ya está registrado' });
             }
 
-            // Hashear contraseña si existe
+            // Hashear contraseña
             let hashedPassword = null;
             if (password) {
+                if (password.length < 6) {
+                    return res.status(400).json({ message: 'La contraseña debe tener al menos 6 caracteres' });
+                }
                 hashedPassword = await bcrypt.hash(password, 10);
             }
 
@@ -57,8 +68,17 @@ module.exports = (db) => {
                 }
             }
 
+            // Los compradores se crean activos, los vendedores pendientes
+            const isActive = role === 'Comprador';
+
+            // Procesar credencialFotos (pueden venir como Base64 o rutas)
+            let credencialFotosJson = null;
+            if (credencialFotos && Array.isArray(credencialFotos)) {
+                credencialFotosJson = JSON.stringify(credencialFotos);
+            }
+
             // Insertar usuario
-            const [result] = await db.promise().query(
+            const [result] = await db.query(
                 `INSERT INTO users 
                 (role, numeroControl, nombreCompleto, carrera, email, telefono, password, 
                  codigoAcceso, credencialFotos, isVendedorTambien, createdAt, isActive, calificacion, totalVentas, totalCompras)
@@ -66,8 +86,7 @@ module.exports = (db) => {
                 [
                     role, numeroControl, nombreCompleto, carrera || null, email || null, 
                     telefono || null, hashedPassword, codigoAcceso || null,
-                    credencialFotos ? JSON.stringify(credencialFotos) : null,
-                    isVendedorTambien || false, true
+                    credencialFotosJson, isVendedorTambien || false, isActive
                 ]
             );
 
@@ -78,8 +97,15 @@ module.exports = (db) => {
                 { expiresIn: '7d' }
             );
 
+            // Generar refresh token
+            const refreshToken = jwt.sign(
+                { userId: result.insertId },
+                process.env.JWT_SECRET,
+                { expiresIn: '30d' }
+            );
+
             // Obtener usuario creado
-            const [users] = await db.promise().query(
+            const [users] = await db.query(
                 `SELECT id, role, numeroControl, nombreCompleto, carrera, email, telefono, 
                         isVendedorTambien, createdAt, isActive, calificacion, totalVentas, totalCompras
                  FROM users WHERE id = ?`,
@@ -88,13 +114,16 @@ module.exports = (db) => {
 
             res.status(201).json({
                 token,
+                refreshToken,
                 user: users[0],
-                message: 'Usuario registrado exitosamente'
+                message: role === 'Vendedor' 
+                    ? 'Usuario registrado exitosamente. Tu cuenta está pendiente de aprobación por un administrador.'
+                    : 'Usuario registrado exitosamente'
             });
 
         } catch (error) {
             console.error('Error en registro:', error);
-            res.status(500).json({ message: 'Error al registrar usuario' });
+            res.status(500).json({ message: 'Error al registrar usuario: ' + error.message });
         }
     });
 
@@ -108,23 +137,23 @@ module.exports = (db) => {
 
         try {
             // Buscar usuario
-            const [users] = await db.promise().query(
+            const [users] = await db.query(
                 `SELECT id, role, numeroControl, nombreCompleto, carrera, email, telefono,
                         password, codigoAcceso, isVendedorTambien, createdAt, isActive, 
-                        calificacion, totalVentas, totalCompras
+                        calificacion, totalVentas, totalCompras, direccion
                  FROM users WHERE numeroControl = ?`,
                 [numeroControl]
             );
 
             if (users.length === 0) {
-                return res.status(401).json({ message: 'Credenciales incorrectas' });
+                return res.status(401).json({ message: 'Número de control no registrado' });
             }
 
             const user = users[0];
 
             // Verificar si usuario está activo
             if (!user.isActive) {
-                return res.status(401).json({ message: 'Cuenta desactivada. Contacta al administrador.' });
+                return res.status(401).json({ message: 'Cuenta desactivada o pendiente de aprobación. Contacta al administrador.' });
             }
 
             // Verificar rol
@@ -159,7 +188,7 @@ module.exports = (db) => {
             // Generar refresh token
             const refreshToken = jwt.sign(
                 { userId: user.id },
-                process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET,
+                process.env.JWT_SECRET,
                 { expiresIn: '30d' }
             );
 
@@ -189,12 +218,9 @@ module.exports = (db) => {
         }
 
         try {
-            const decoded = jwt.verify(
-                refreshToken,
-                process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET
-            );
+            const decoded = jwt.verify(refreshToken, process.env.JWT_SECRET);
 
-            const [users] = await db.promise().query(
+            const [users] = await db.query(
                 'SELECT id, role FROM users WHERE id = ? AND isActive = TRUE',
                 [decoded.userId]
             );
@@ -219,8 +245,6 @@ module.exports = (db) => {
 
     // POST /api/auth/logout - Cerrar sesión
     router.post('/logout', (req, res) => {
-        // El logout es principalmente del lado del cliente
-        // Pero podemos registrar si queremos invalidar tokens
         res.json({ message: 'Sesión cerrada exitosamente' });
     });
 
