@@ -4,6 +4,13 @@ const cors = require('cors');
 const dotenv = require('dotenv');
 
 dotenv.config();
+
+// 🔧 CORREGIDO: Verificar JWT_SECRET
+if (!process.env.JWT_SECRET) {
+  console.warn('⚠️ ADVERTENCIA: JWT_SECRET no está definido. Usando valor por defecto (NO RECOMENDADO PARA PRODUCCIÓN)');
+  process.env.JWT_SECRET = 'bytesnack-super-secret-key-change-in-production';
+}
+
 const app = express();
 
 app.use(cors());
@@ -172,12 +179,13 @@ async function inicializarBaseDatos() {
         // Verificar si existe admin, si no crearlo
         const [admins] = await db.query('SELECT id FROM users WHERE role = "Administrador" LIMIT 1');
         if (admins.length === 0) {
+            const bcrypt = require('bcryptjs');
+            const hashedPassword = await bcrypt.hash('Admin123*', 10);
             await db.query(`
                 INSERT INTO users (role, numeroControl, nombreCompleto, email, password, codigoAcceso, isActive, createdAt)
                 VALUES ('Administrador', 'ADMIN001', 'Administrador ByteSnack', 'admin@bytesnack.com', 
-                        '$2a$10$N9qo8uLOickgx2ZMRZoMy.Mr/.b7TJqFzYI8Zz5KqKqKqKqKqKqK', 
-                        'Admin123*', TRUE, NOW())
-            `);
+                        ?, 'Admin123*', TRUE, NOW())
+            `, [hashedPassword]);
             console.log('✅ Usuario administrador creado (ADMIN001 / Admin123*)');
         }
 
@@ -189,7 +197,7 @@ async function inicializarBaseDatos() {
 
 // ============ RUTAS PRINCIPALES ============
 
-// Ruta raíz - IMPORTANTE: Esto soluciona el error "Cannot GET /"
+// Ruta raíz
 app.get('/', (req, res) => {
     res.json({
         message: 'ByteSnack API - Servidor funcionando correctamente',
@@ -269,4 +277,5 @@ app.listen(PORT, () => {
     console.log(`📡 API disponible en: http://localhost:${PORT}/api`);
     console.log(`🔗 Ruta raíz: http://localhost:${PORT}/`);
     console.log(`❤️ Health check: http://localhost:${PORT}/api/health`);
+    console.log(`🔐 JWT_SECRET: ${process.env.JWT_SECRET ? '✅ Configurado' : '⚠️ Usando valor por defecto'}`);
 });

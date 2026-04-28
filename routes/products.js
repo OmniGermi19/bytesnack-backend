@@ -35,7 +35,8 @@ module.exports = (db) => {
             const parsedProducts = products.map(p => ({
                 ...p,
                 price: parseFloat(p.price),
-                images: typeof p.images === 'string' ? JSON.parse(p.images || '[]') : (p.images || [])
+                images: typeof p.images === 'string' ? JSON.parse(p.images || '[]') : (p.images || []),
+                isAvailable: p.isAvailable === 1 // 🔧 CORREGIDO: Asegurar booleano
             }));
             res.json(parsedProducts);
         } catch (error) {
@@ -57,7 +58,8 @@ module.exports = (db) => {
             const parsedProducts = products.map(p => ({
                 ...p,
                 price: parseFloat(p.price),
-                images: typeof p.images === 'string' ? JSON.parse(p.images || '[]') : (p.images || [])
+                images: typeof p.images === 'string' ? JSON.parse(p.images || '[]') : (p.images || []),
+                isAvailable: p.isAvailable === 1
             }));
             res.json(parsedProducts);
         } catch (error) {
@@ -84,10 +86,13 @@ module.exports = (db) => {
                 return res.status(400).json({ message: 'El vendedor especificado no existe' });
             }
             
+            // 🔧 CORREGIDO: Asegurar que images sea un array JSON válido
+            const imagesJson = JSON.stringify(images || []);
+            
             const [result] = await db.query(
                 `INSERT INTO products (name, price, description, sellerId, sellerName, images, stock, location, category, status, isAvailable, createdAt)
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', FALSE, NOW())`,
-                [name, price, description, sellerId, sellerName, JSON.stringify(images || []), stock || 0, location || null, category || 'Otros']
+                [name, price, description, sellerId, sellerName, imagesJson, stock || 0, location || null, category || 'Otros']
             );
             
             res.status(201).json({ 
@@ -114,12 +119,14 @@ module.exports = (db) => {
                 return res.status(403).json({ message: 'No tienes permiso para editar este producto' });
             }
             
+            const imagesJson = JSON.stringify(images || []);
+            
             await db.query(
                 `UPDATE products 
                  SET name = ?, price = ?, description = ?, images = ?, stock = ?, 
                      location = ?, category = ?, isAvailable = ?, updatedAt = NOW()
                  WHERE id = ?`,
-                [name, price, description, JSON.stringify(images || []), stock, location, category, isAvailable, req.params.id]
+                [name, price, description, imagesJson, stock, location, category, isAvailable ? 1 : 0, req.params.id]
             );
             
             res.json({ message: 'Producto actualizado correctamente' });
