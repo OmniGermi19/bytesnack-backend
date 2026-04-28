@@ -36,7 +36,7 @@ module.exports = (db) => {
                 ...p,
                 price: parseFloat(p.price),
                 images: typeof p.images === 'string' ? JSON.parse(p.images || '[]') : (p.images || []),
-                isAvailable: p.isAvailable === 1 // 🔧 CORREGIDO: Asegurar booleano
+                isAvailable: p.isAvailable === 1
             }));
             res.json(parsedProducts);
         } catch (error) {
@@ -86,7 +86,6 @@ module.exports = (db) => {
                 return res.status(400).json({ message: 'El vendedor especificado no existe' });
             }
             
-            // 🔧 CORREGIDO: Asegurar que images sea un array JSON válido
             const imagesJson = JSON.stringify(images || []);
             
             const [result] = await db.query(
