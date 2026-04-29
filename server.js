@@ -6,7 +6,7 @@ const dotenv = require('dotenv');
 dotenv.config();
 
 if (!process.env.JWT_SECRET) {
-    console.warn('⚠️ ADVERTENCIA: JWT_SECRET no está definido. Usando valor por defecto');
+    console.warn('⚠️ ADVERTENCIA: JWT_SECRET no definido. Usando valor por defecto');
     process.env.JWT_SECRET = 'bytesnack-super-secret-key-change-in-production';
 }
 
@@ -168,15 +168,26 @@ async function inicializarBaseDatos() {
 }
 
 // ============ RUTAS ============
+
+// ✅ Ruta raíz
 app.get('/', (req, res) => {
-    res.json({ message: 'ByteSnack API - Servidor funcionando', version: '2.0.0', status: 'online' });
+    res.json({ 
+        message: 'ByteSnack API - Servidor funcionando', 
+        version: '2.0.0', 
+        status: 'online' 
+    });
 });
 
-app.get('/api/health', (req, res) => {
-    res.json({ status: 'ok', timestamp: new Date().toISOString(), uptime: process.uptime() });
+// ✅ Health check
+app.get('/health', (req, res) => {
+    res.json({ 
+        status: 'ok', 
+        timestamp: new Date().toISOString(), 
+        uptime: process.uptime() 
+    });
 });
 
-// Importar rutas (AHORA SÍ ENCONTRARÁ LOS ARCHIVOS)
+// ✅ IMPORTANTE: Todas las rutas DEBEN estar bajo /api
 const authRouter = require('./routes/auth')(db);
 const productsRouter = require('./routes/products')(db);
 const adminRouter = require('./routes/admin')(db);
@@ -186,6 +197,7 @@ const cartRouter = require('./routes/cart')(db);
 const salesRouter = require('./routes/sales')(db);
 const notificationsRouter = require('./routes/notifications')(db);
 
+// ✅ CORREGIDO: Todas las rutas con prefijo /api
 app.use('/api/auth', authRouter);
 app.use('/api/products', productsRouter);
 app.use('/api/admin', adminRouter);
@@ -195,11 +207,35 @@ app.use('/api/cart', cartRouter);
 app.use('/api/sales', salesRouter);
 app.use('/api/notifications', notificationsRouter);
 
+// ✅ Ruta para verificar que /api existe
+app.get('/api', (req, res) => {
+    res.json({
+        message: 'ByteSnack API v2.0',
+        endpoints: {
+            auth: '/api/auth',
+            products: '/api/products',
+            admin: '/api/admin',
+            orders: '/api/orders',
+            users: '/api/users',
+            cart: '/api/cart',
+            sales: '/api/sales',
+            notifications: '/api/notifications',
+            health: '/health'
+        }
+    });
+});
+
+// ✅ Manejo de rutas no encontradas
 app.use('*', (req, res) => {
-    res.status(404).json({ error: 'Ruta no encontrada', message: `La ruta ${req.originalUrl} no existe` });
+    res.status(404).json({ 
+        error: 'Ruta no encontrada', 
+        message: `La ruta ${req.originalUrl} no existe` 
+    });
 });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
+    console.log(`📡 API disponible en: http://localhost:${PORT}/api`);
+    console.log(`❤️ Health check: http://localhost:${PORT}/health`);
 });
