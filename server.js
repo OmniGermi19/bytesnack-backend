@@ -197,6 +197,7 @@ const cartRouter = require('./routes/cart')(db);
 const salesRouter = require('./routes/sales')(db);
 const notificationsRouter = require('./routes/notifications')(db);
 
+
 // ✅ CORREGIDO: Todas las rutas con prefijo /api
 app.use('/api/auth', authRouter);
 app.use('/api/products', productsRouter);

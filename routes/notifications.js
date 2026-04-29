@@ -60,7 +60,7 @@ module.exports = (db) => {
         }
     });
 
-    // POST /api/notifications/product-pending - Notificar a admins (solo admin o vendedor)
+    // POST /api/notifications/product-pending - Notificar a admins
     router.post('/product-pending', authenticateToken, async (req, res) => {
         const { productId, productName, sellerName } = req.body;
         
@@ -73,14 +73,43 @@ module.exports = (db) => {
                      VALUES (?, ?, ?, 'product_approval', FALSE, NOW())`,
                     [admin.id, 
                      '🆕 Nuevo producto pendiente', 
-                     `${sellerName} ha publicado "${productName}". Revisa el producto para aprobarlo.`,
-                     'product_approval']
+                     `${sellerName} ha publicado "${productName}". Revisa el producto para aprobarlo.`]
                 );
             }
             res.json({ message: 'Notificaciones enviadas a administradores' });
         } catch (error) {
             console.error('Error enviando notificaciones:', error);
             res.status(500).json({ message: 'Error al enviar notificaciones' });
+        }
+    });
+
+    // ========== NUEVO ENDPOINT: Enviar notificación a usuario específico ==========
+    // POST /api/notifications/send - Enviar notificación a un usuario específico (solo admin)
+    router.post('/send', authenticateToken, isAdmin, async (req, res) => {
+        const { userId, title, body, type } = req.body;
+        
+        if (!userId || !title || !body) {
+            return res.status(400).json({ message: 'Faltan campos requeridos' });
+        }
+        
+        try {
+            // Verificar que el usuario existe
+            const [users] = await db.query('SELECT id FROM users WHERE id = ?', [userId]);
+            if (users.length === 0) {
+                return res.status(404).json({ message: 'Usuario no encontrado' });
+            }
+            
+            // Insertar notificación
+            await db.query(
+                `INSERT INTO notifications (userId, title, body, type, isRead, createdAt)
+                 VALUES (?, ?, ?, ?, FALSE, NOW())`,
+                [userId, title, body, type || 'user_status']
+            );
+            
+            res.json({ message: 'Notificación enviada correctamente' });
+        } catch (error) {
+            console.error('Error enviando notificación:', error);
+            res.status(500).json({ message: 'Error al enviar notificación' });
         }
     });
 
