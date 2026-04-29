@@ -27,7 +27,8 @@ module.exports = (db) => {
             params.push(`%${search}%`, `%${search}%`);
         }
         
-        query += ' ORDER BY p.createdAt DESC LIMIT ? OFFSET ?';
+        // ✅ CORREGIDO: Sin ORDER BY en la consulta para evitar problemas de memoria
+        query += ' LIMIT ? OFFSET ?';
         params.push(parseInt(limit), offset);
         
         try {
@@ -38,6 +39,10 @@ module.exports = (db) => {
                 images: typeof p.images === 'string' ? JSON.parse(p.images || '[]') : (p.images || []),
                 isAvailable: p.isAvailable === 1
             }));
+            
+            // Ordenar en JavaScript
+            parsedProducts.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+            
             res.json(parsedProducts);
         } catch (error) {
             console.error('Error obteniendo productos:', error);
@@ -52,8 +57,7 @@ module.exports = (db) => {
                 `SELECT p.*, u.nombreCompleto as sellerName, u.email as sellerEmail
                  FROM products p
                  JOIN users u ON p.sellerId = u.id
-                 WHERE p.status = 'pending'
-                 ORDER BY p.createdAt DESC`
+                 WHERE p.status = 'pending'`
             );
             const parsedProducts = products.map(p => ({
                 ...p,
@@ -61,6 +65,9 @@ module.exports = (db) => {
                 images: typeof p.images === 'string' ? JSON.parse(p.images || '[]') : (p.images || []),
                 isAvailable: p.isAvailable === 1
             }));
+            
+            parsedProducts.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+            
             res.json(parsedProducts);
         } catch (error) {
             console.error('Error obteniendo productos pendientes:', error);

@@ -13,7 +13,6 @@ module.exports = (db) => {
         }
 
         try {
-            // Verificar stock antes de crear pedido
             for (const item of items) {
                 const [products] = await db.query(
                     'SELECT stock, name FROM products WHERE id = ? AND status = "approved" AND isAvailable = TRUE',
@@ -33,7 +32,6 @@ module.exports = (db) => {
                 }
             }
 
-            // Crear pedido
             const [orderResult] = await db.query(
                 `INSERT INTO orders (userId, total, paymentMethod, shippingAddress, status, createdAt, updatedAt)
                  VALUES (?, ?, ?, ?, 'pending', NOW(), NOW())`,
@@ -42,7 +40,6 @@ module.exports = (db) => {
 
             const orderId = orderResult.insertId;
             
-            // Insertar items del pedido
             const orderItems = items.map(item => [
                 orderId, item.productId, item.name, item.quantity, item.price, item.imageUrl || null
             ]);
@@ -52,7 +49,6 @@ module.exports = (db) => {
                 [orderItems]
             );
 
-            // Actualizar stock de productos
             for (const item of items) {
                 await db.query(
                     'UPDATE products SET stock = stock - ? WHERE id = ?',
@@ -60,10 +56,8 @@ module.exports = (db) => {
                 );
             }
 
-            // Vaciar carrito
             await db.query('DELETE FROM cart_items WHERE userId = ?', [req.userId]);
 
-            // Notificar al vendedor
             for (const item of items) {
                 const [products] = await db.query('SELECT sellerId, sellerName FROM products WHERE id = ?', [item.productId]);
                 if (products.length > 0) {
@@ -72,8 +66,7 @@ module.exports = (db) => {
                          VALUES (?, ?, ?, 'order_update', FALSE, NOW())`,
                         [products[0].sellerId, 
                          '📦 Nuevo pedido', 
-                         `Has recibido un pedido de ${item.quantity}x ${item.name} por \$${(item.price * item.quantity).toFixed(2)}`,
-                         'order_update']
+                         `Has recibido un pedido de ${item.quantity}x ${item.name} por \$${(item.price * item.quantity).toFixed(2)}`]
                     );
                 }
             }
@@ -97,8 +90,6 @@ module.exports = (db) => {
             params.push(status);
         }
         
-        query += ' ORDER BY createdAt DESC';
-        
         try {
             const [orders] = await db.query(query, params);
             
@@ -109,6 +100,8 @@ module.exports = (db) => {
                 );
                 order.items = items;
             }
+            
+            orders.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
             
             res.json(orders);
         } catch (error) {
@@ -142,7 +135,7 @@ module.exports = (db) => {
         }
     });
 
-    // PATCH /api/orders/:orderId/status - Actualizar estado (solo vendedor o admin)
+    // PATCH /api/orders/:orderId/status - Actualizar estado
     router.patch('/:orderId/status', authenticateToken, async (req, res) => {
         const { status } = req.body;
         const validStatuses = ['pending', 'processing', 'shipped', 'delivered', 'cancelled'];
@@ -152,7 +145,6 @@ module.exports = (db) => {
         }
 
         try {
-            // Verificar permisos (vendedor del producto o admin)
             const [orderCheck] = await db.query(
                 `SELECT o.userId, oi.productId, o.userId as buyerId
                  FROM orders o
@@ -182,7 +174,6 @@ module.exports = (db) => {
                 [status, req.params.orderId]
             );
 
-            // Notificar al comprador
             const statusMessages = {
                 'processing': 'Tu pedido está siendo procesado',
                 'shipped': 'Tu pedido ha sido enviado',
@@ -196,8 +187,7 @@ module.exports = (db) => {
                      VALUES (?, ?, ?, 'order_update', FALSE, NOW())`,
                     [orderCheck[0].buyerId, 
                      `📦 Pedido #${req.params.orderId}`, 
-                     statusMessages[status],
-                     'order_update']
+                     statusMessages[status]]
                 );
             }
 
@@ -218,10 +208,11 @@ module.exports = (db) => {
                  JOIN order_items oi ON o.id = oi.orderId
                  JOIN products p ON oi.productId = p.id
                  JOIN users u ON o.userId = u.id
-                 WHERE p.sellerId = ?
-                 ORDER BY o.createdAt DESC`,
+                 WHERE p.sellerId = ?`,
                 [req.userId]
             );
+            
+            sales.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
             
             const totalSales = sales.reduce((sum, s) => sum + (parseFloat(s.price) * s.quantity), 0);
             const totalOrders = [...new Set(sales.map(s => s.id))].length;

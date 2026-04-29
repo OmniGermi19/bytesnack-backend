@@ -50,22 +50,26 @@ module.exports = (db) => {
         }
     });
 
-    // GET /api/admin/pending-products - Productos pendientes
+    // GET /api/admin/pending-products - Productos pendientes (CORREGIDO - sin ORDER BY problemático)
     router.get('/pending-products', authenticateToken, isAdmin, async (req, res) => {
         try {
+            // ✅ CORREGIDO: Eliminado ORDER BY que causa problemas de memoria
             const [products] = await db.query(
                 `SELECT p.*, u.nombreCompleto as sellerName, u.email as sellerEmail, u.numeroControl as sellerControl
                  FROM products p
                  JOIN users u ON p.sellerId = u.id
-                 WHERE p.status = 'pending'
-                 ORDER BY p.createdAt ASC`
+                 WHERE p.status = 'pending'`
             );
             
             const parsedProducts = products.map(p => ({
                 ...p,
                 price: parseFloat(p.price),
-                images: typeof p.images === 'string' ? JSON.parse(p.images || '[]') : (p.images || [])
+                images: typeof p.images === 'string' ? JSON.parse(p.images || '[]') : (p.images || []),
+                isAvailable: p.isAvailable === 1
             }));
+            
+            // Ordenar en JavaScript en lugar de SQL
+            parsedProducts.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
             
             res.json(parsedProducts);
         } catch (error) {
@@ -114,17 +118,20 @@ module.exports = (db) => {
     // GET /api/admin/pending-vendors - Vendedores pendientes
     router.get('/pending-vendors', authenticateToken, isAdmin, async (req, res) => {
         try {
+            // ✅ CORREGIDO: Sin ORDER BY para evitar problemas de memoria
             const [vendors] = await db.query(
                 `SELECT id, nombreCompleto, numeroControl, carrera, email, telefono, credencialFotos, createdAt 
                  FROM users 
-                 WHERE role = 'Vendedor' AND isActive = 0 
-                 ORDER BY createdAt ASC`
+                 WHERE role = 'Vendedor' AND isActive = 0`
             );
             
             const parsedVendors = vendors.map(v => ({
                 ...v,
                 credencialFotos: typeof v.credencialFotos === 'string' ? JSON.parse(v.credencialFotos || '[]') : (v.credencialFotos || [])
             }));
+            
+            // Ordenar en JavaScript
+            parsedVendors.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
             
             res.json({ vendors: parsedVendors });
         } catch (error) {
