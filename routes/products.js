@@ -27,7 +27,6 @@ module.exports = (db) => {
             params.push(`%${search}%`, `%${search}%`);
         }
         
-        // ✅ CORREGIDO: Sin ORDER BY en la consulta para evitar problemas de memoria
         query += ' LIMIT ? OFFSET ?';
         params.push(parseInt(limit), offset);
         
@@ -40,7 +39,6 @@ module.exports = (db) => {
                 isAvailable: p.isAvailable === 1
             }));
             
-            // Ordenar en JavaScript
             parsedProducts.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
             
             res.json(parsedProducts);
@@ -50,32 +48,7 @@ module.exports = (db) => {
         }
     });
 
-    // GET /api/products/pending - Productos pendientes (solo admin)
-    router.get('/pending', authenticateToken, isAdmin, async (req, res) => {
-        try {
-            const [products] = await db.query(
-                `SELECT p.*, u.nombreCompleto as sellerName, u.email as sellerEmail
-                 FROM products p
-                 JOIN users u ON p.sellerId = u.id
-                 WHERE p.status = 'pending'`
-            );
-            const parsedProducts = products.map(p => ({
-                ...p,
-                price: parseFloat(p.price),
-                images: typeof p.images === 'string' ? JSON.parse(p.images || '[]') : (p.images || []),
-                isAvailable: p.isAvailable === 1
-            }));
-            
-            parsedProducts.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-            
-            res.json(parsedProducts);
-        } catch (error) {
-            console.error('Error obteniendo productos pendientes:', error);
-            res.status(500).json({ message: 'Error al obtener productos pendientes' });
-        }
-    });
-
-    // POST /api/products - Crear producto (solo vendedores)
+    // POST /api/products - Crear producto
     router.post('/', authenticateToken, canCreateProduct, async (req, res) => {
         const { name, price, description, sellerId, sellerName, images, stock, location, category } = req.body;
         
@@ -111,7 +84,7 @@ module.exports = (db) => {
         }
     });
 
-    // PUT /api/products/:id - Actualizar producto (solo dueño o admin)
+    // PUT /api/products/:id - Actualizar producto
     router.put('/:id', authenticateToken, async (req, res) => {
         const { name, price, description, images, stock, location, category, isAvailable } = req.body;
         
@@ -142,7 +115,7 @@ module.exports = (db) => {
         }
     });
 
-    // DELETE /api/products/:id - Eliminar producto (solo dueño o admin)
+    // DELETE /api/products/:id - Eliminar producto
     router.delete('/:id', authenticateToken, async (req, res) => {
         try {
             const [products] = await db.query('SELECT sellerId FROM products WHERE id = ?', [req.params.id]);

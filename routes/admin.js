@@ -50,16 +50,19 @@ module.exports = (db) => {
         }
     });
 
-    // GET /api/admin/pending-products - Productos pendientes (CORREGIDO - sin ORDER BY problemático)
+    // GET /api/admin/pending-products - Productos pendientes (CORREGIDO)
     router.get('/pending-products', authenticateToken, isAdmin, async (req, res) => {
         try {
-            // ✅ CORREGIDO: Eliminado ORDER BY que causa problemas de memoria
+            console.log('🔍 [ADMIN] Usuario autenticado:', req.userId, req.userRole);
+            
             const [products] = await db.query(
                 `SELECT p.*, u.nombreCompleto as sellerName, u.email as sellerEmail, u.numeroControl as sellerControl
                  FROM products p
                  JOIN users u ON p.sellerId = u.id
                  WHERE p.status = 'pending'`
             );
+            
+            console.log('📊 [ADMIN] Productos pendientes encontrados:', products.length);
             
             const parsedProducts = products.map(p => ({
                 ...p,
@@ -73,7 +76,7 @@ module.exports = (db) => {
             
             res.json(parsedProducts);
         } catch (error) {
-            console.error('Error obteniendo productos pendientes:', error);
+            console.error('❌ [ADMIN] Error obteniendo productos pendientes:', error);
             res.status(500).json({ message: 'Error al obtener productos pendientes' });
         }
     });
@@ -92,7 +95,6 @@ module.exports = (db) => {
                 [status, isAvailable, productId]
             );
             
-            // Obtener el vendedor para notificar
             const [products] = await db.query('SELECT sellerId, name FROM products WHERE id = ?', [productId]);
             if (products.length > 0) {
                 const message = approved 
@@ -118,7 +120,6 @@ module.exports = (db) => {
     // GET /api/admin/pending-vendors - Vendedores pendientes
     router.get('/pending-vendors', authenticateToken, isAdmin, async (req, res) => {
         try {
-            // ✅ CORREGIDO: Sin ORDER BY para evitar problemas de memoria
             const [vendors] = await db.query(
                 `SELECT id, nombreCompleto, numeroControl, carrera, email, telefono, credencialFotos, createdAt 
                  FROM users 
@@ -130,7 +131,6 @@ module.exports = (db) => {
                 credencialFotos: typeof v.credencialFotos === 'string' ? JSON.parse(v.credencialFotos || '[]') : (v.credencialFotos || [])
             }));
             
-            // Ordenar en JavaScript
             parsedVendors.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
             
             res.json({ vendors: parsedVendors });
