@@ -48,6 +48,37 @@ module.exports = (db) => {
         }
     });
 
+    // ========== NUEVO ENDPOINT: Obtener productos del vendedor autenticado ==========
+    // GET /api/products/my-products - Obtener TODOS los productos del vendedor (aprobados y pendientes)
+    router.get('/my-products', authenticateToken, isSeller, async (req, res) => {
+        try {
+            console.log('🔍 [PRODUCTS] Obteniendo productos del vendedor:', req.userId);
+            
+            const [products] = await db.query(
+                `SELECT p.*, u.nombreCompleto as sellerName
+                 FROM products p
+                 JOIN users u ON p.sellerId = u.id
+                 WHERE p.sellerId = ?
+                 ORDER BY p.createdAt DESC`,
+                [req.userId]
+            );
+            
+            const parsedProducts = products.map(p => ({
+                ...p,
+                price: parseFloat(p.price),
+                images: typeof p.images === 'string' ? JSON.parse(p.images || '[]') : (p.images || []),
+                isAvailable: p.isAvailable === 1,
+                status: p.status
+            }));
+            
+            console.log(`✅ [PRODUCTS] Productos encontrados: ${parsedProducts.length}`);
+            res.json(parsedProducts);
+        } catch (error) {
+            console.error('Error obteniendo productos del vendedor:', error);
+            res.status(500).json({ message: 'Error al cargar tus productos' });
+        }
+    });
+
     // POST /api/products - Crear producto
     router.post('/', authenticateToken, canCreateProduct, async (req, res) => {
         const { name, price, description, sellerId, sellerName, images, stock, location, category } = req.body;
@@ -73,6 +104,8 @@ module.exports = (db) => {
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', FALSE, NOW())`,
                 [name, price, description, sellerId, sellerName, imagesJson, stock || 0, location || null, category || 'Otros']
             );
+            
+            console.log(`✅ [PRODUCTS] Producto creado: ${name} (ID: ${result.insertId}, status: pending)`);
             
             res.status(201).json({ 
                 id: result.insertId, 
