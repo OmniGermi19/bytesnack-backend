@@ -1,5 +1,5 @@
 const express = require('express');
-const { authenticateToken, isAdmin, isSeller, canCreateProduct, canApproveProduct } = require('../middleware/auth');
+const { authenticateToken, isAdmin, isSeller, canCreateProduct } = require('../middleware/auth');
 
 module.exports = (db) => {
     const router = express.Router();
@@ -27,6 +27,7 @@ module.exports = (db) => {
             params.push(`%${search}%`, `%${search}%`);
         }
         
+        // ✅ SIN ORDER BY en SQL para evitar error de memoria
         query += ' LIMIT ? OFFSET ?';
         params.push(parseInt(limit), offset);
         
@@ -39,6 +40,7 @@ module.exports = (db) => {
                 isAvailable: p.isAvailable === 1
             }));
             
+            // ✅ Ordenar en JavaScript en lugar de SQL
             parsedProducts.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
             
             res.json(parsedProducts);
@@ -48,18 +50,17 @@ module.exports = (db) => {
         }
     });
 
-    // ========== NUEVO ENDPOINT: Obtener productos del vendedor autenticado ==========
-    // GET /api/products/my-products - Obtener TODOS los productos del vendedor (aprobados y pendientes)
+    // ========== ENDPOINT PARA VENDEDOR: Obtener TODOS sus productos ==========
     router.get('/my-products', authenticateToken, isSeller, async (req, res) => {
         try {
             console.log('🔍 [PRODUCTS] Obteniendo productos del vendedor:', req.userId);
             
+            // ✅ SIN ORDER BY en SQL para evitar error de memoria
             const [products] = await db.query(
                 `SELECT p.*, u.nombreCompleto as sellerName
                  FROM products p
                  JOIN users u ON p.sellerId = u.id
-                 WHERE p.sellerId = ?
-                 ORDER BY p.createdAt DESC`,
+                 WHERE p.sellerId = ?`,
                 [req.userId]
             );
             
@@ -67,9 +68,11 @@ module.exports = (db) => {
                 ...p,
                 price: parseFloat(p.price),
                 images: typeof p.images === 'string' ? JSON.parse(p.images || '[]') : (p.images || []),
-                isAvailable: p.isAvailable === 1,
-                status: p.status
+                isAvailable: p.isAvailable === 1
             }));
+            
+            // ✅ Ordenar en JavaScript en lugar de SQL
+            parsedProducts.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
             
             console.log(`✅ [PRODUCTS] Productos encontrados: ${parsedProducts.length}`);
             res.json(parsedProducts);
@@ -105,7 +108,7 @@ module.exports = (db) => {
                 [name, price, description, sellerId, sellerName, imagesJson, stock || 0, location || null, category || 'Otros']
             );
             
-            console.log(`✅ [PRODUCTS] Producto creado: ${name} (ID: ${result.insertId}, status: pending)`);
+            console.log(`✅ [PRODUCTS] Producto creado: ${name} (ID: ${result.insertId})`);
             
             res.status(201).json({ 
                 id: result.insertId, 

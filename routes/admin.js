@@ -50,11 +50,12 @@ module.exports = (db) => {
         }
     });
 
-    // GET /api/admin/pending-products - Productos pendientes (CORREGIDO)
+    // GET /api/admin/pending-products - Productos pendientes
     router.get('/pending-products', authenticateToken, isAdmin, async (req, res) => {
         try {
             console.log('🔍 [ADMIN] Usuario autenticado:', req.userId, req.userRole);
             
+            // ✅ SIN ORDER BY en SQL para evitar error de memoria
             const [products] = await db.query(
                 `SELECT p.*, u.nombreCompleto as sellerName, u.email as sellerEmail, u.numeroControl as sellerControl
                  FROM products p
@@ -71,7 +72,7 @@ module.exports = (db) => {
                 isAvailable: p.isAvailable === 1
             }));
             
-            // Ordenar en JavaScript en lugar de SQL
+            // ✅ Ordenar en JavaScript en lugar de SQL
             parsedProducts.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
             
             res.json(parsedProducts);
@@ -120,6 +121,7 @@ module.exports = (db) => {
     // GET /api/admin/pending-vendors - Vendedores pendientes
     router.get('/pending-vendors', authenticateToken, isAdmin, async (req, res) => {
         try {
+            // ✅ SIN ORDER BY en SQL para evitar error de memoria
             const [vendors] = await db.query(
                 `SELECT id, nombreCompleto, numeroControl, carrera, email, telefono, credencialFotos, createdAt 
                  FROM users 
@@ -131,6 +133,7 @@ module.exports = (db) => {
                 credencialFotos: typeof v.credencialFotos === 'string' ? JSON.parse(v.credencialFotos || '[]') : (v.credencialFotos || [])
             }));
             
+            // ✅ Ordenar en JavaScript
             parsedVendors.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
             
             res.json({ vendors: parsedVendors });
