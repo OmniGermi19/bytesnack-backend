@@ -13,8 +13,20 @@ if (!process.env.JWT_SECRET) {
 const app = express();
 
 app.use(cors());
+// Aumentar límite para imágenes grandes
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+
+// Log para ver el tamaño de las peticiones
+app.use((req, res, next) => {
+    if (req.method === 'POST' || req.method === 'PUT') {
+        const contentLength = req.headers['content-length'];
+        if (contentLength) {
+            console.log(`📡 [SERVER] ${req.method} ${req.url} - Tamaño: ${(parseInt(contentLength) / 1024 / 1024).toFixed(2)} MB`);
+        }
+    }
+    next();
+});
 
 // ============ CONEXIÓN A MySQL ============
 let pool;

@@ -168,7 +168,7 @@ module.exports = (db) => {
         }
     });
 
-    // ========== NUEVO: CAMBIOS DE PERFIL PENDIENTES ==========
+    // ========== CAMBIOS DE PERFIL PENDIENTES ==========
     
     // GET /api/admin/pending-profile-changes - Obtener cambios de perfil pendientes
     router.get('/pending-profile-changes', authenticateToken, isAdmin, async (req, res) => {
@@ -194,6 +194,8 @@ module.exports = (db) => {
     // POST /api/admin/approve-profile-change - Aprobar/Rechazar cambio de perfil
     router.post('/approve-profile-change', authenticateToken, isAdmin, async (req, res) => {
         const { changeId, approved, rejectionReason } = req.body;
+        
+        console.log('📡 [ADMIN] Procesando cambio de perfil:', changeId, approved ? 'Aprobar' : 'Rechazar');
         
         try {
             // Obtener el cambio pendiente
@@ -244,6 +246,7 @@ module.exports = (db) => {
                 
                 if (updates.length > 1) {
                     await db.query(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`, params);
+                    console.log('✅ [ADMIN] Cambios aplicados al usuario');
                 }
             }
             
@@ -269,7 +272,7 @@ module.exports = (db) => {
             
             res.json({ message: approved ? 'Cambios aprobados' : 'Cambios rechazados' });
         } catch (error) {
-            console.error('Error procesando cambio de perfil:', error);
+            console.error('❌ Error procesando cambio de perfil:', error);
             res.status(500).json({ message: 'Error al procesar el cambio' });
         }
     });

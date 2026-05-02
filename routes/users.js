@@ -24,9 +24,21 @@ module.exports = (db) => {
         }
     });
 
-    // ========== NUEVO: Solicitar cambio de perfil ==========
+    // ========== SOLICITAR CAMBIO DE PERFIL ==========
     router.post('/profile/request-change', authenticateToken, async (req, res) => {
         const { nombreCompleto, carrera, email, telefono, direccion, profileImage } = req.body;
+        
+        console.log('📡 [API] Solicitud de cambio de perfil recibida');
+        console.log('📡 [API] Campos:', Object.keys(req.body));
+        
+        if (profileImage) {
+            console.log('📡 [API] Tamaño imagen Base64:', profileImage.length);
+            
+            // Verificar tamaño máximo (10MB)
+            if (profileImage.length > 10 * 1024 * 1024) {
+                return res.status(400).json({ message: 'La imagen es demasiado grande (máximo 10MB)' });
+            }
+        }
         
         if (!nombreCompleto && !carrera && !email && !telefono && !direccion && !profileImage) {
             return res.status(400).json({ message: 'No hay cambios para solicitar' });
@@ -56,12 +68,14 @@ module.exports = (db) => {
             }
             
             // Insertar solicitud de cambios
-            await db.query(
+            const [result] = await db.query(
                 `INSERT INTO pending_profile_changes 
                 (userId, nombreCompleto, carrera, email, telefono, direccion, profileImage, status, createdAt)
                 VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', NOW())`,
                 [req.userId, nombreCompleto || null, carrera || null, email || null, telefono || null, direccion || null, profileImage || null]
             );
+            
+            console.log('✅ [API] Solicitud de cambio creada, ID:', result.insertId);
             
             // Notificar a los administradores
             const [admins] = await db.query('SELECT id FROM users WHERE role = "Administrador"');
@@ -75,16 +89,16 @@ module.exports = (db) => {
                 );
             }
             
-            res.json({ message: 'Solicitud de cambios enviada correctamente' });
+            res.json({ message: 'Solicitud de cambios enviada correctamente', changeId: result.insertId });
         } catch (error) {
-            console.error('Error solicitando cambios:', error);
-            res.status(500).json({ message: 'Error al solicitar cambios' });
+            console.error('❌ Error solicitando cambios:', error);
+            res.status(500).json({ message: 'Error al solicitar cambios: ' + error.message });
         }
     });
 
     // PUT /api/users/profile - Actualizar perfil (directo, sin aprobación - solo para admin)
     router.put('/profile', authenticateToken, async (req, res) => {
-        const { telefono, direccion, password, email, nombreCompleto } = req.body;
+        const { telefono, direccion, password, email, nombreCompleto, profileImage } = req.body;
         const updates = [];
         const params = [];
 
@@ -106,6 +120,11 @@ module.exports = (db) => {
         if (nombreCompleto !== undefined && nombreCompleto.trim().length > 0) {
             updates.push('nombreCompleto = ?');
             params.push(nombreCompleto);
+        }
+        
+        if (profileImage !== undefined && profileImage.trim().length > 0) {
+            updates.push('profileImage = ?');
+            params.push(profileImage);
         }
         
         if (password !== undefined && password.trim().length > 0) {
@@ -138,10 +157,17 @@ module.exports = (db) => {
         try {
             const [users] = await db.query(
                 `SELECT id, role, numeroControl, nombreCompleto, carrera, email, telefono, 
-                        isVendedorTambien, createdAt, isActive, calificacion, totalVentas, totalCompras, profileImage
+                        isVendedorTambien, createdAt, isActive, calificacion, totalVentas, totalCompras, profileImage, credencialFotos
                  FROM users ORDER BY createdAt DESC`
             );
-            res.json(users);
+            
+            // Parsear credencialFotos si es string
+            const parsedUsers = users.map(user => ({
+                ...user,
+                credencialFotos: typeof user.credencialFotos === 'string' ? JSON.parse(user.credencialFotos || '[]') : (user.credencialFotos || [])
+            }));
+            
+            res.json(parsedUsers);
         } catch (error) {
             console.error('Error obteniendo usuarios:', error);
             res.status(500).json({ message: 'Error al obtener usuarios' });
