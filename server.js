@@ -51,6 +51,7 @@ pool.getConnection((err, connection) => {
 
 async function inicializarBaseDatos() {
     try {
+        // Tabla users
         await db.query(`CREATE TABLE IF NOT EXISTS users (
             id INT PRIMARY KEY AUTO_INCREMENT,
             role ENUM('Comprador', 'Vendedor', 'Administrador') NOT NULL DEFAULT 'Comprador',
@@ -61,9 +62,10 @@ async function inicializarBaseDatos() {
             telefono VARCHAR(20),
             password VARCHAR(255),
             codigoAcceso VARCHAR(255),
-            credencialFotos JSON,
+            credencialFotos LONGTEXT,
             isVendedorTambien BOOLEAN DEFAULT FALSE,
             direccion TEXT,
+            profileImage LONGTEXT,
             calificacion DECIMAL(3,2) DEFAULT 0,
             totalVentas INT DEFAULT 0,
             totalCompras INT DEFAULT 0,
@@ -76,6 +78,7 @@ async function inicializarBaseDatos() {
         )`);
         console.log('✅ Tabla users verificada');
 
+        // Tabla products
         await db.query(`CREATE TABLE IF NOT EXISTS products (
             id INT PRIMARY KEY AUTO_INCREMENT,
             name VARCHAR(200) NOT NULL,
@@ -83,7 +86,7 @@ async function inicializarBaseDatos() {
             description TEXT,
             sellerId INT NOT NULL,
             sellerName VARCHAR(100) NOT NULL,
-            images JSON,
+            images LONGTEXT,
             stock INT DEFAULT 0,
             location VARCHAR(200),
             category VARCHAR(50) DEFAULT 'Otros',
@@ -98,6 +101,7 @@ async function inicializarBaseDatos() {
         )`);
         console.log('✅ Tabla products verificada');
 
+        // Tabla cart_items
         await db.query(`CREATE TABLE IF NOT EXISTS cart_items (
             id INT PRIMARY KEY AUTO_INCREMENT,
             userId INT NOT NULL,
@@ -110,6 +114,7 @@ async function inicializarBaseDatos() {
         )`);
         console.log('✅ Tabla cart_items verificada');
 
+        // Tabla orders
         await db.query(`CREATE TABLE IF NOT EXISTS orders (
             id INT PRIMARY KEY AUTO_INCREMENT,
             userId INT NOT NULL,
@@ -125,6 +130,7 @@ async function inicializarBaseDatos() {
         )`);
         console.log('✅ Tabla orders verificada');
 
+        // Tabla order_items
         await db.query(`CREATE TABLE IF NOT EXISTS order_items (
             id INT PRIMARY KEY AUTO_INCREMENT,
             orderId INT NOT NULL,
@@ -138,6 +144,7 @@ async function inicializarBaseDatos() {
         )`);
         console.log('✅ Tabla order_items verificada');
 
+        // Tabla notifications
         await db.query(`CREATE TABLE IF NOT EXISTS notifications (
             id INT PRIMARY KEY AUTO_INCREMENT,
             userId INT NOT NULL,
@@ -152,6 +159,27 @@ async function inicializarBaseDatos() {
         )`);
         console.log('✅ Tabla notifications verificada');
 
+        // Tabla pending_profile_changes
+        await db.query(`CREATE TABLE IF NOT EXISTS pending_profile_changes (
+            id INT PRIMARY KEY AUTO_INCREMENT,
+            userId INT NOT NULL,
+            nombreCompleto VARCHAR(100),
+            carrera VARCHAR(100),
+            email VARCHAR(100),
+            telefono VARCHAR(20),
+            direccion TEXT,
+            profileImage LONGTEXT,
+            status ENUM('pending', 'approved', 'rejected') DEFAULT 'pending',
+            createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            reviewedAt TIMESTAMP NULL,
+            rejectionReason TEXT,
+            FOREIGN KEY (userId) REFERENCES users(id) ON DELETE CASCADE,
+            INDEX idx_userId (userId),
+            INDEX idx_status (status)
+        )`);
+        console.log('✅ Tabla pending_profile_changes verificada');
+
+        // Crear administrador por defecto si no existe
         const [admins] = await db.query('SELECT id FROM users WHERE role = "Administrador" LIMIT 1');
         if (admins.length === 0) {
             const bcrypt = require('bcryptjs');
@@ -168,26 +196,15 @@ async function inicializarBaseDatos() {
 }
 
 // ============ RUTAS ============
-
-// ✅ Ruta raíz
 app.get('/', (req, res) => {
-    res.json({ 
-        message: 'ByteSnack API - Servidor funcionando', 
-        version: '2.0.0', 
-        status: 'online' 
-    });
+    res.json({ message: 'ByteSnack API - Servidor funcionando', version: '2.0.0', status: 'online' });
 });
 
-// ✅ Health check
-app.get('/health', (req, res) => {
-    res.json({ 
-        status: 'ok', 
-        timestamp: new Date().toISOString(), 
-        uptime: process.uptime() 
-    });
+app.get('/api/health', (req, res) => {
+    res.json({ status: 'ok', timestamp: new Date().toISOString(), uptime: process.uptime() });
 });
 
-// ✅ IMPORTANTE: Todas las rutas DEBEN estar bajo /api
+// Importar routers
 const authRouter = require('./routes/auth')(db);
 const productsRouter = require('./routes/products')(db);
 const adminRouter = require('./routes/admin')(db);
@@ -197,8 +214,7 @@ const cartRouter = require('./routes/cart')(db);
 const salesRouter = require('./routes/sales')(db);
 const notificationsRouter = require('./routes/notifications')(db);
 
-
-// ✅ CORREGIDO: Todas las rutas con prefijo /api
+// Usar routers
 app.use('/api/auth', authRouter);
 app.use('/api/products', productsRouter);
 app.use('/api/admin', adminRouter);
@@ -208,25 +224,7 @@ app.use('/api/cart', cartRouter);
 app.use('/api/sales', salesRouter);
 app.use('/api/notifications', notificationsRouter);
 
-// ✅ Ruta para verificar que /api existe
-app.get('/api', (req, res) => {
-    res.json({
-        message: 'ByteSnack API v2.0',
-        endpoints: {
-            auth: '/api/auth',
-            products: '/api/products',
-            admin: '/api/admin',
-            orders: '/api/orders',
-            users: '/api/users',
-            cart: '/api/cart',
-            sales: '/api/sales',
-            notifications: '/api/notifications',
-            health: '/health'
-        }
-    });
-});
-
-// ✅ Manejo de rutas no encontradas
+// Manejo de rutas no encontradas
 app.use('*', (req, res) => {
     res.status(404).json({ 
         error: 'Ruta no encontrada', 
@@ -238,5 +236,5 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
     console.log(`📡 API disponible en: http://localhost:${PORT}/api`);
-    console.log(`❤️ Health check: http://localhost:${PORT}/health`);
+    console.log(`❤️ Health check: http://localhost:${PORT}/api/health`);
 });

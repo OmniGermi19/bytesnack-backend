@@ -10,7 +10,7 @@ module.exports = (db) => {
         try {
             const [users] = await db.query(
                 `SELECT id, role, numeroControl, nombreCompleto, carrera, email, telefono, 
-                        isVendedorTambien, createdAt, isActive, calificacion, totalVentas, totalCompras, direccion
+                        isVendedorTambien, createdAt, isActive, calificacion, totalVentas, totalCompras, direccion, profileImage
                  FROM users WHERE id = ?`,
                 [req.userId]
             );
@@ -24,7 +24,65 @@ module.exports = (db) => {
         }
     });
 
-    // PUT /api/users/profile - Actualizar perfil
+    // ========== NUEVO: Solicitar cambio de perfil ==========
+    router.post('/profile/request-change', authenticateToken, async (req, res) => {
+        const { nombreCompleto, carrera, email, telefono, direccion, profileImage } = req.body;
+        
+        if (!nombreCompleto && !carrera && !email && !telefono && !direccion && !profileImage) {
+            return res.status(400).json({ message: 'No hay cambios para solicitar' });
+        }
+        
+        try {
+            // Obtener valores actuales del usuario
+            const [users] = await db.query(
+                'SELECT nombreCompleto, carrera, email, telefono, direccion, profileImage FROM users WHERE id = ?',
+                [req.userId]
+            );
+            
+            if (users.length === 0) {
+                return res.status(404).json({ message: 'Usuario no encontrado' });
+            }
+            
+            const current = users[0];
+            
+            // Verificar si ya hay una solicitud pendiente
+            const [existing] = await db.query(
+                'SELECT id FROM pending_profile_changes WHERE userId = ? AND status = "pending"',
+                [req.userId]
+            );
+            
+            if (existing.length > 0) {
+                return res.status(400).json({ message: 'Ya tienes una solicitud de cambios pendiente' });
+            }
+            
+            // Insertar solicitud de cambios
+            await db.query(
+                `INSERT INTO pending_profile_changes 
+                (userId, nombreCompleto, carrera, email, telefono, direccion, profileImage, status, createdAt)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', NOW())`,
+                [req.userId, nombreCompleto || null, carrera || null, email || null, telefono || null, direccion || null, profileImage || null]
+            );
+            
+            // Notificar a los administradores
+            const [admins] = await db.query('SELECT id FROM users WHERE role = "Administrador"');
+            for (const admin of admins) {
+                await db.query(
+                    `INSERT INTO notifications (userId, title, body, type, isRead, createdAt)
+                     VALUES (?, ?, ?, 'profile_change', FALSE, NOW())`,
+                    [admin.id, 
+                     '✏️ Cambios de perfil pendientes', 
+                     `El usuario ${current.nombreCompleto} ha solicitado cambios en su perfil. Revisa la solicitud.`]
+                );
+            }
+            
+            res.json({ message: 'Solicitud de cambios enviada correctamente' });
+        } catch (error) {
+            console.error('Error solicitando cambios:', error);
+            res.status(500).json({ message: 'Error al solicitar cambios' });
+        }
+    });
+
+    // PUT /api/users/profile - Actualizar perfil (directo, sin aprobación - solo para admin)
     router.put('/profile', authenticateToken, async (req, res) => {
         const { telefono, direccion, password, email, nombreCompleto } = req.body;
         const updates = [];
@@ -80,7 +138,7 @@ module.exports = (db) => {
         try {
             const [users] = await db.query(
                 `SELECT id, role, numeroControl, nombreCompleto, carrera, email, telefono, 
-                        isVendedorTambien, createdAt, isActive, calificacion, totalVentas, totalCompras
+                        isVendedorTambien, createdAt, isActive, calificacion, totalVentas, totalCompras, profileImage
                  FROM users ORDER BY createdAt DESC`
             );
             res.json(users);

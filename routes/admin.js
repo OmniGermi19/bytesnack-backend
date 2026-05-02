@@ -55,7 +55,6 @@ module.exports = (db) => {
         try {
             console.log('🔍 [ADMIN] Usuario autenticado:', req.userId, req.userRole);
             
-            // ✅ SIN ORDER BY en SQL para evitar error de memoria
             const [products] = await db.query(
                 `SELECT p.*, u.nombreCompleto as sellerName, u.email as sellerEmail, u.numeroControl as sellerControl
                  FROM products p
@@ -72,7 +71,6 @@ module.exports = (db) => {
                 isAvailable: p.isAvailable === 1
             }));
             
-            // ✅ Ordenar en JavaScript en lugar de SQL
             parsedProducts.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
             
             res.json(parsedProducts);
@@ -121,7 +119,6 @@ module.exports = (db) => {
     // GET /api/admin/pending-vendors - Vendedores pendientes
     router.get('/pending-vendors', authenticateToken, isAdmin, async (req, res) => {
         try {
-            // ✅ SIN ORDER BY en SQL para evitar error de memoria
             const [vendors] = await db.query(
                 `SELECT id, nombreCompleto, numeroControl, carrera, email, telefono, credencialFotos, createdAt 
                  FROM users 
@@ -133,7 +130,6 @@ module.exports = (db) => {
                 credencialFotos: typeof v.credencialFotos === 'string' ? JSON.parse(v.credencialFotos || '[]') : (v.credencialFotos || [])
             }));
             
-            // ✅ Ordenar en JavaScript
             parsedVendors.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
             
             res.json({ vendors: parsedVendors });
@@ -169,6 +165,112 @@ module.exports = (db) => {
         } catch (error) {
             console.error('Error procesando vendedor:', error);
             res.status(500).json({ message: 'Error al procesar la solicitud' });
+        }
+    });
+
+    // ========== NUEVO: CAMBIOS DE PERFIL PENDIENTES ==========
+    
+    // GET /api/admin/pending-profile-changes - Obtener cambios de perfil pendientes
+    router.get('/pending-profile-changes', authenticateToken, isAdmin, async (req, res) => {
+        try {
+            const [changes] = await db.query(
+                `SELECT pc.*, u.nombreCompleto as userName, u.role as userRole,
+                        u.nombreCompleto as nombreCompletoActual, u.carrera as carreraActual,
+                        u.email as emailActual, u.telefono as telefonoActual,
+                        u.direccion as direccionActual, u.profileImage as profileImageActual
+                 FROM pending_profile_changes pc
+                 JOIN users u ON pc.userId = u.id
+                 WHERE pc.status = 'pending'
+                 ORDER BY pc.createdAt ASC`
+            );
+            
+            res.json({ changes });
+        } catch (error) {
+            console.error('Error obteniendo cambios pendientes:', error);
+            res.status(500).json({ message: 'Error al obtener cambios pendientes' });
+        }
+    });
+
+    // POST /api/admin/approve-profile-change - Aprobar/Rechazar cambio de perfil
+    router.post('/approve-profile-change', authenticateToken, isAdmin, async (req, res) => {
+        const { changeId, approved, rejectionReason } = req.body;
+        
+        try {
+            // Obtener el cambio pendiente
+            const [changes] = await db.query(
+                `SELECT * FROM pending_profile_changes WHERE id = ?`,
+                [changeId]
+            );
+            
+            if (changes.length === 0) {
+                return res.status(404).json({ message: 'Cambio no encontrado' });
+            }
+            
+            const change = changes[0];
+            const status = approved ? 'approved' : 'rejected';
+            
+            if (approved) {
+                // Aplicar los cambios al usuario
+                const updates = [];
+                const params = [];
+                
+                if (change.nombreCompleto) {
+                    updates.push('nombreCompleto = ?');
+                    params.push(change.nombreCompleto);
+                }
+                if (change.carrera) {
+                    updates.push('carrera = ?');
+                    params.push(change.carrera);
+                }
+                if (change.email) {
+                    updates.push('email = ?');
+                    params.push(change.email);
+                }
+                if (change.telefono) {
+                    updates.push('telefono = ?');
+                    params.push(change.telefono);
+                }
+                if (change.direccion) {
+                    updates.push('direccion = ?');
+                    params.push(change.direccion);
+                }
+                if (change.profileImage) {
+                    updates.push('profileImage = ?');
+                    params.push(change.profileImage);
+                }
+                
+                updates.push('updatedAt = NOW()');
+                params.push(change.userId);
+                
+                if (updates.length > 1) {
+                    await db.query(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`, params);
+                }
+            }
+            
+            // Actualizar el estado del cambio
+            await db.query(
+                `UPDATE pending_profile_changes 
+                 SET status = ?, reviewedAt = NOW(), rejectionReason = ?
+                 WHERE id = ?`,
+                [status, approved ? null : (rejectionReason || 'No especificado'), changeId]
+            );
+            
+            // Notificar al usuario
+            const title = approved ? '✅ Cambios aprobados' : '❌ Cambios rechazados';
+            const message = approved 
+                ? 'Los cambios solicitados en tu perfil han sido aprobados y aplicados.'
+                : `Los cambios solicitados en tu perfil han sido rechazados. Motivo: ${rejectionReason || 'No especificado'}`;
+            
+            await db.query(
+                `INSERT INTO notifications (userId, title, body, type, isRead, createdAt)
+                 VALUES (?, ?, ?, 'profile_change', FALSE, NOW())`,
+                [change.userId, title, message]
+            );
+            
+            res.json({ message: approved ? 'Cambios aprobados' : 'Cambios rechazados' });
+        } catch (error) {
+            console.error('Error procesando cambio de perfil:', error);
+            res.status(500).json({ message: 'Error al procesar el cambio' });
         }
     });
 

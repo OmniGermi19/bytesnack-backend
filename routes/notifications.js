@@ -83,7 +83,6 @@ module.exports = (db) => {
         }
     });
 
-    // ========== NUEVO ENDPOINT: Enviar notificación a usuario específico ==========
     // POST /api/notifications/send - Enviar notificación a un usuario específico (solo admin)
     router.post('/send', authenticateToken, isAdmin, async (req, res) => {
         const { userId, title, body, type } = req.body;
@@ -93,17 +92,15 @@ module.exports = (db) => {
         }
         
         try {
-            // Verificar que el usuario existe
             const [users] = await db.query('SELECT id FROM users WHERE id = ?', [userId]);
             if (users.length === 0) {
                 return res.status(404).json({ message: 'Usuario no encontrado' });
             }
             
-            // Insertar notificación
             await db.query(
                 `INSERT INTO notifications (userId, title, body, type, isRead, createdAt)
                  VALUES (?, ?, ?, ?, FALSE, NOW())`,
-                [userId, title, body, type || 'user_status']
+                [userId, title, body, type || 'general']
             );
             
             res.json({ message: 'Notificación enviada correctamente' });

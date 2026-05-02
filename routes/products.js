@@ -27,7 +27,6 @@ module.exports = (db) => {
             params.push(`%${search}%`, `%${search}%`);
         }
         
-        // ✅ SIN ORDER BY en SQL para evitar error de memoria
         query += ' LIMIT ? OFFSET ?';
         params.push(parseInt(limit), offset);
         
@@ -40,7 +39,6 @@ module.exports = (db) => {
                 isAvailable: p.isAvailable === 1
             }));
             
-            // ✅ Ordenar en JavaScript en lugar de SQL
             parsedProducts.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
             
             res.json(parsedProducts);
@@ -50,12 +48,11 @@ module.exports = (db) => {
         }
     });
 
-    // ========== ENDPOINT PARA VENDEDOR: Obtener TODOS sus productos ==========
+    // GET /api/products/my-products - Obtener TODOS los productos del vendedor autenticado
     router.get('/my-products', authenticateToken, isSeller, async (req, res) => {
         try {
             console.log('🔍 [PRODUCTS] Obteniendo productos del vendedor:', req.userId);
             
-            // ✅ SIN ORDER BY en SQL para evitar error de memoria
             const [products] = await db.query(
                 `SELECT p.*, u.nombreCompleto as sellerName
                  FROM products p
@@ -71,7 +68,6 @@ module.exports = (db) => {
                 isAvailable: p.isAvailable === 1
             }));
             
-            // ✅ Ordenar en JavaScript en lugar de SQL
             parsedProducts.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
             
             console.log(`✅ [PRODUCTS] Productos encontrados: ${parsedProducts.length}`);
