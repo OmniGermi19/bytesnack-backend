@@ -5,6 +5,36 @@ const dotenv = require('dotenv');
 
 dotenv.config();
 
+// ============ FIREBASE ADMIN SDK ============
+const admin = require('firebase-admin');
+
+// Configuración de Firebase desde variables de entorno
+// En Railway, agrega estas variables con los valores de tu JSON
+const firebaseConfig = {
+    type: "service_account",
+    projectId: process.env.FIREBASE_PROJECT_ID || "bytesnack-3df71",
+    privateKeyId: process.env.FIREBASE_PRIVATE_KEY_ID,
+    privateKey: (process.env.FIREBASE_PRIVATE_KEY || "").replace(/\\n/g, '\n'),
+    clientEmail: process.env.FIREBASE_CLIENT_EMAIL || "firebase-adminsdk-fbsvc@bytesnack-3df71.iam.gserviceaccount.com",
+    clientId: process.env.FIREBASE_CLIENT_ID,
+    authUri: "https://accounts.google.com/o/oauth2/auth",
+    tokenUri: "https://oauth2.googleapis.com/token",
+    authProviderX509CertUrl: "https://www.googleapis.com/oauth2/v1/certs",
+    clientX509CertUrl: process.env.FIREBASE_CLIENT_X509_CERT_URL,
+    universeDomain: "googleapis.com"
+};
+
+// Inicializar Firebase Admin SDK
+try {
+    admin.initializeApp({
+        credential: admin.credential.cert(firebaseConfig),
+    });
+    console.log('✅ Firebase Admin SDK inicializado correctamente');
+} catch (error) {
+    console.error('❌ Error inicializando Firebase Admin SDK:', error.message);
+    console.warn('⚠️ Las notificaciones push no funcionarán');
+}
+
 if (!process.env.JWT_SECRET) {
     console.warn('⚠️ ADVERTENCIA: JWT_SECRET no definido. Usando valor por defecto');
     process.env.JWT_SECRET = 'bytesnack-super-secret-key-change-in-production';
@@ -207,7 +237,7 @@ async function inicializarBaseDatos() {
         )`);
         console.log('✅ Tabla password_resets verificada');
 
-        // Tabla fcm_tokens (opcional - para notificaciones push)
+        // Tabla fcm_tokens
         await db.query(`CREATE TABLE IF NOT EXISTS fcm_tokens (
             id INT PRIMARY KEY AUTO_INCREMENT,
             userId INT NOT NULL,

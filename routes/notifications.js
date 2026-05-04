@@ -1,5 +1,6 @@
 const express = require('express');
 const { authenticateToken, isAdmin } = require('../middleware/auth');
+const admin = require('firebase-admin');
 
 module.exports = (db) => {
     const router = express.Router();
@@ -67,14 +68,17 @@ module.exports = (db) => {
         try {
             const [admins] = await db.query('SELECT id FROM users WHERE role = "Administrador"');
             
-            for (const admin of admins) {
+            for (const adminUser of admins) {
                 await db.query(
                     `INSERT INTO notifications (userId, title, body, type, isRead, createdAt)
                      VALUES (?, ?, ?, 'product_approval', FALSE, NOW())`,
-                    [admin.id, 
+                    [adminUser.id, 
                      '🆕 Nuevo producto pendiente', 
                      `${sellerName} ha publicado "${productName}". Revisa el producto para aprobarlo.`]
                 );
+                
+                // Enviar push notification
+                await sendPushNotification(adminUser.id, 'Nuevo producto pendiente', `${sellerName} ha publicado "${productName}"`, 'product_approval');
             }
             res.json({ message: 'Notificaciones enviadas a administradores' });
         } catch (error) {
@@ -103,6 +107,9 @@ module.exports = (db) => {
                 [userId, title, body, type || 'general']
             );
             
+            // Enviar push notification
+            await sendPushNotification(userId, title, body, type || 'general');
+            
             res.json({ message: 'Notificación enviada correctamente' });
         } catch (error) {
             console.error('Error enviando notificación:', error);
@@ -110,7 +117,8 @@ module.exports = (db) => {
         }
     });
 
-    // ========== FCM TOKENS (opcional - solo si se usa Firebase) ==========
+    // ========== FCM TOKENS ==========
+    
     // POST /api/notifications/fcm-token - Guardar token FCM
     router.post('/fcm-token', authenticateToken, async (req, res) => {
         const { token, deviceInfo } = req.body;
@@ -143,6 +151,51 @@ module.exports = (db) => {
             res.status(500).json({ message: 'Error al eliminar token' });
         }
     });
+
+    // Función para enviar push notification
+    async function sendPushNotification(userId, title, body, type, data = {}) {
+        try {
+            const [tokens] = await db.query(
+                'SELECT token FROM fcm_tokens WHERE userId = ?',
+                [userId]
+            );
+            
+            if (tokens.length === 0) {
+                console.log(`⚠️ Usuario ${userId} no tiene tokens FCM registrados`);
+                return;
+            }
+            
+            // Limitar a 500 tokens por lote (límite de Firebase)
+            const tokenChunks = [];
+            for (let i = 0; i < tokens.length; i += 500) {
+                tokenChunks.push(tokens.slice(i, i + 500));
+            }
+            
+            for (const chunk of tokenChunks) {
+                const message = {
+                    notification: { title, body },
+                    data: { type, ...data },
+                    tokens: chunk.map(t => t.token),
+                };
+                
+                const response = await admin.messaging().sendEachForMulticast(message);
+                console.log(`📱 Push notifications: ${response.successCount} exitosas, ${response.failureCount} fallidas`);
+                
+                // Limpiar tokens inválidos
+                if (response.failureCount > 0) {
+                    for (let i = 0; i < response.responses.length; i++) {
+                        const resp = response.responses[i];
+                        if (!resp.success && resp.error?.code === 'messaging/registration-token-not-registered') {
+                            await db.query('DELETE FROM fcm_tokens WHERE token = ?', [chunk[i].token]);
+                            console.log(`🗑️ Token inválido eliminado: ${chunk[i].token}`);
+                        }
+                    }
+                }
+            }
+        } catch (error) {
+            console.error('Error enviando push notification:', error);
+        }
+    }
 
     return router;
 };
