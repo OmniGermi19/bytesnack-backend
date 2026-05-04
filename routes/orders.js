@@ -203,7 +203,8 @@ module.exports = (db) => {
     router.get('/seller/sales', authenticateToken, isSeller, async (req, res) => {
         try {
             const [sales] = await db.query(
-                `SELECT o.*, oi.productName, oi.quantity, oi.price, oi.imageUrl, u.nombreCompleto as buyerName
+                `SELECT o.*, oi.productName, oi.quantity, oi.price, oi.imageUrl, u.nombreCompleto as buyerName,
+                        oi.rating, oi.ratingComment, oi.ratedAt
                  FROM orders o
                  JOIN order_items oi ON o.id = oi.orderId
                  JOIN products p ON oi.productId = p.id
@@ -221,6 +222,94 @@ module.exports = (db) => {
         } catch (error) {
             console.error('Error obteniendo ventas:', error);
             res.status(500).json({ message: 'Error al obtener ventas' });
+        }
+    });
+
+    // ========== CALIFICACIÓN DE VENDEDORES ==========
+    
+    // POST /api/orders/:orderId/rate - Calificar vendedor (solo comprador del pedido)
+    router.post('/:orderId/rate', authenticateToken, isBuyer, async (req, res) => {
+        const { rating, comment } = req.body;
+        const orderId = req.params.orderId;
+        
+        if (!rating || rating < 1 || rating > 5) {
+            return res.status(400).json({ message: 'La calificación debe ser entre 1 y 5' });
+        }
+        
+        try {
+            // Verificar que el pedido pertenece al usuario y está entregado
+            const [orders] = await db.query(
+                'SELECT * FROM orders WHERE id = ? AND userId = ? AND status = "delivered"',
+                [orderId, req.userId]
+            );
+            
+            if (orders.length === 0) {
+                return res.status(404).json({ message: 'Pedido no encontrado o no entregado' });
+            }
+            
+            // Verificar si ya se calificó este pedido
+            const [existingRatings] = await db.query(
+                'SELECT id FROM order_items WHERE orderId = ? AND rating IS NOT NULL LIMIT 1',
+                [orderId]
+            );
+            
+            if (existingRatings.length > 0) {
+                return res.status(400).json({ message: 'Este pedido ya ha sido calificado' });
+            }
+            
+            // Obtener el producto y el vendedor del primer item
+            const [orderItems] = await db.query(
+                `SELECT oi.*, p.sellerId, p.sellerName 
+                 FROM order_items oi
+                 JOIN products p ON oi.productId = p.id
+                 WHERE oi.orderId = ? LIMIT 1`,
+                [orderId]
+            );
+            
+            if (orderItems.length === 0) {
+                return res.status(404).json({ message: 'Producto no encontrado' });
+            }
+            
+            const item = orderItems[0];
+            
+            // Actualizar la calificación en order_items
+            await db.query(
+                'UPDATE order_items SET rating = ?, ratingComment = ?, ratedAt = NOW() WHERE orderId = ? AND productId = ?',
+                [rating, comment || null, orderId, item.productId]
+            );
+            
+            // Calcular nuevo promedio de calificación del vendedor
+            const [ratingsSummary] = await db.query(
+                `SELECT AVG(oi.rating) as averageRating, COUNT(oi.rating) as totalRatings
+                 FROM order_items oi
+                 JOIN products p ON oi.productId = p.id
+                 WHERE p.sellerId = ? AND oi.rating IS NOT NULL`,
+                [item.sellerId]
+            );
+            
+            const averageRating = parseFloat(ratingsSummary[0]?.averageRating || 0);
+            const totalRatings = ratingsSummary[0]?.totalRatings || 0;
+            
+            // Actualizar la calificación del vendedor
+            await db.query(
+                'UPDATE users SET calificacion = ?, totalVentas = ? WHERE id = ?',
+                [averageRating, totalRatings, item.sellerId]
+            );
+            
+            // Notificar al vendedor
+            const stars = '★'.repeat(rating) + '☆'.repeat(5 - rating);
+            await db.query(
+                `INSERT INTO notifications (userId, title, body, type, isRead, createdAt)
+                 VALUES (?, ?, ?, 'rating', FALSE, NOW())`,
+                [item.sellerId, 
+                 '⭐ Nueva calificación', 
+                 `Has recibido una calificación de ${rating}/5 estrellas (${stars}) por "${item.productName}".`]
+            );
+            
+            res.json({ message: 'Calificación enviada correctamente' });
+        } catch (error) {
+            console.error('Error en rate:', error);
+            res.status(500).json({ message: 'Error al enviar calificación' });
         }
     });
 

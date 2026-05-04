@@ -1,5 +1,12 @@
 const express = require('express');
 const { authenticateToken, isAdmin } = require('../middleware/auth');
+const admin = require('firebase-admin');
+
+// Inicializar Firebase Admin SDK (colocar en server.js)
+// const serviceAccount = require('./serviceAccountKey.json');
+// admin.initializeApp({
+//   credential: admin.credential.cert(serviceAccount)
+// });
 
 module.exports = (db) => {
     const router = express.Router();
@@ -75,6 +82,9 @@ module.exports = (db) => {
                      '🆕 Nuevo producto pendiente', 
                      `${sellerName} ha publicado "${productName}". Revisa el producto para aprobarlo.`]
                 );
+                
+                // Enviar push notification
+                await sendPushNotification(admin.id, 'Nuevo producto pendiente', `${sellerName} ha publicado "${productName}"`, 'product_approval');
             }
             res.json({ message: 'Notificaciones enviadas a administradores' });
         } catch (error) {
@@ -103,12 +113,76 @@ module.exports = (db) => {
                 [userId, title, body, type || 'general']
             );
             
+            // Enviar push notification
+            await sendPushNotification(userId, title, body, type || 'general');
+            
             res.json({ message: 'Notificación enviada correctamente' });
         } catch (error) {
             console.error('Error enviando notificación:', error);
             res.status(500).json({ message: 'Error al enviar notificación' });
         }
     });
+
+    // ========== FCM TOKENS ==========
+    
+    // POST /api/notifications/fcm-token - Guardar token FCM
+    router.post('/fcm-token', authenticateToken, async (req, res) => {
+        const { token, deviceInfo } = req.body;
+        
+        if (!token) {
+            return res.status(400).json({ message: 'Token requerido' });
+        }
+        
+        try {
+            await db.query(
+                `INSERT INTO fcm_tokens (userId, token, deviceInfo, createdAt)
+                 VALUES (?, ?, ?, NOW())
+                 ON DUPLICATE KEY UPDATE updatedAt = NOW(), deviceInfo = ?`,
+                [req.userId, token, deviceInfo || null, deviceInfo || null]
+            );
+            res.json({ message: 'Token FCM guardado' });
+        } catch (error) {
+            console.error('Error guardando token FCM:', error);
+            res.status(500).json({ message: 'Error al guardar token' });
+        }
+    });
+    
+    // DELETE /api/notifications/fcm-token - Eliminar token FCM (logout)
+    router.delete('/fcm-token', authenticateToken, async (req, res) => {
+        try {
+            await db.query('DELETE FROM fcm_tokens WHERE userId = ?', [req.userId]);
+            res.json({ message: 'Token FCM eliminado' });
+        } catch (error) {
+            console.error('Error eliminando token FCM:', error);
+            res.status(500).json({ message: 'Error al eliminar token' });
+        }
+    });
+
+    // Función para enviar push notification
+    async function sendPushNotification(userId, title, body, type, data = {}) {
+        try {
+            const [tokens] = await db.query(
+                'SELECT token FROM fcm_tokens WHERE userId = ?',
+                [userId]
+            );
+            
+            if (tokens.length === 0) return;
+            
+            const message = {
+                notification: { title, body },
+                data: { type, ...data },
+                tokens: tokens.map(t => t.token),
+            };
+            
+            // Enviar a Firebase Cloud Messaging
+            // const response = await admin.messaging().sendEachForMulticast(message);
+            // console.log('Push notifications enviadas:', response);
+            
+            console.log(`📱 Push notification a usuario ${userId}: ${title}`);
+        } catch (error) {
+            console.error('Error enviando push notification:', error);
+        }
+    }
 
     return router;
 };

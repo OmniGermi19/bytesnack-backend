@@ -167,5 +167,27 @@ module.exports = (db) => {
         }
     });
 
+    // ========== ENDPOINT PARA OBTENER STOCK ==========
+    // GET /api/products/:id/stock - Obtener stock de un producto
+    router.get('/:id/stock', authenticateToken, async (req, res) => {
+        const productId = req.params.id;
+        
+        try {
+            const [products] = await db.query(
+                'SELECT stock, name FROM products WHERE id = ? AND status = "approved" AND isAvailable = TRUE',
+                [productId]
+            );
+            
+            if (products.length === 0) {
+                return res.status(404).json({ message: 'Producto no encontrado' });
+            }
+            
+            res.json({ stock: products[0].stock, name: products[0].name });
+        } catch (error) {
+            console.error('Error obteniendo stock:', error);
+            res.status(500).json({ message: 'Error al obtener stock' });
+        }
+    });
+
     return router;
 };
