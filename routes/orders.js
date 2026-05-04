@@ -4,7 +4,18 @@ const { authenticateToken, isBuyer, isSeller } = require('../middleware/auth');
 module.exports = (db) => {
     const router = express.Router();
 
-    // POST /api/orders - Crear pedido
+    // ========== FUNCIÓN PARA GENERAR CÓDIGO DE SEGUIMIENTO ==========
+    function generateTrackingCode() {
+        const date = new Date();
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+        const random = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
+        return `BS-${year}${month}${day}-${random}`;
+    }
+
+    // ========== CREAR PEDIDO ==========
+    // POST /api/orders
     router.post('/', authenticateToken, isBuyer, async (req, res) => {
         const { items, total, paymentMethod, shippingAddress } = req.body;
 
@@ -13,6 +24,7 @@ module.exports = (db) => {
         }
 
         try {
+            // Verificar stock
             for (const item of items) {
                 const [products] = await db.query(
                     'SELECT stock, name FROM products WHERE id = ? AND status = "approved" AND isAvailable = TRUE',
@@ -32,14 +44,28 @@ module.exports = (db) => {
                 }
             }
 
+            // ✅ Generar código de seguimiento único
+            let trackingCode;
+            let isUnique = false;
+            while (!isUnique) {
+                trackingCode = generateTrackingCode();
+                const [existing] = await db.query(
+                    'SELECT id FROM orders WHERE tracking_code = ?',
+                    [trackingCode]
+                );
+                if (existing.length === 0) isUnique = true;
+            }
+
+            // ✅ Insertar pedido con código de seguimiento
             const [orderResult] = await db.query(
-                `INSERT INTO orders (userId, total, paymentMethod, shippingAddress, status, createdAt, updatedAt)
-                 VALUES (?, ?, ?, ?, 'pending', NOW(), NOW())`,
-                [req.userId, total, paymentMethod, shippingAddress || 'Entrega en ITESCO']
+                `INSERT INTO orders (userId, total, paymentMethod, shippingAddress, status, tracking_code, createdAt, updatedAt)
+                 VALUES (?, ?, ?, ?, 'pending', ?, NOW(), NOW())`,
+                [req.userId, total, paymentMethod, shippingAddress || 'Entrega en ITESCO', trackingCode]
             );
 
             const orderId = orderResult.insertId;
             
+            // Insertar items del pedido
             const orderItems = items.map(item => [
                 orderId, item.productId, item.name, item.quantity, item.price, item.imageUrl || null
             ]);
@@ -49,6 +75,7 @@ module.exports = (db) => {
                 [orderItems]
             );
 
+            // Actualizar stock
             for (const item of items) {
                 await db.query(
                     'UPDATE products SET stock = stock - ? WHERE id = ?',
@@ -56,8 +83,10 @@ module.exports = (db) => {
                 );
             }
 
+            // Vaciar carrito
             await db.query('DELETE FROM cart_items WHERE userId = ?', [req.userId]);
 
+            // Notificar a vendedores
             for (const item of items) {
                 const [products] = await db.query('SELECT sellerId, sellerName FROM products WHERE id = ?', [item.productId]);
                 if (products.length > 0) {
@@ -66,12 +95,16 @@ module.exports = (db) => {
                          VALUES (?, ?, ?, 'order_update', FALSE, NOW())`,
                         [products[0].sellerId, 
                          '📦 Nuevo pedido', 
-                         `Has recibido un pedido de ${item.quantity}x ${item.name} por \$${(item.price * item.quantity).toFixed(2)}`]
+                         `Has recibido un pedido de ${item.quantity}x ${item.name} por \$${(item.price * item.quantity).toFixed(2)}\nCódigo de seguimiento: ${trackingCode}`]
                     );
                 }
             }
 
-            res.status(201).json({ id: orderId, message: 'Pedido creado exitosamente' });
+            res.status(201).json({ 
+                id: orderId, 
+                trackingCode: trackingCode,
+                message: 'Pedido creado exitosamente' 
+            });
 
         } catch (error) {
             console.error('Error creando pedido:', error);
@@ -79,7 +112,68 @@ module.exports = (db) => {
         }
     });
 
-    // GET /api/orders - Obtener pedidos del usuario
+    // ========== RASTREAR PEDIDO POR CÓDIGO ==========
+    // GET /api/orders/track/:trackingCode
+    router.get('/track/:trackingCode', authenticateToken, async (req, res) => {
+        const { trackingCode } = req.params;
+        
+        try {
+            const [orders] = await db.query(
+                `SELECT o.*, u.nombreCompleto as buyerName, u.email as buyerEmail
+                 FROM orders o
+                 JOIN users u ON o.userId = u.id
+                 WHERE o.tracking_code = ?`,
+                [trackingCode]
+            );
+            
+            if (orders.length === 0) {
+                return res.status(404).json({ message: 'Pedido no encontrado' });
+            }
+            
+            const order = orders[0];
+            const [items] = await db.query(
+                'SELECT * FROM order_items WHERE orderId = ?',
+                [order.id]
+            );
+            
+            order.items = items;
+            
+            res.json({ order });
+        } catch (error) {
+            console.error('Error rastreando pedido:', error);
+            res.status(500).json({ message: 'Error al rastrear pedido' });
+        }
+    });
+
+    // ========== COMPARTIR CÓDIGO DE SEGUIMIENTO ==========
+    // POST /api/orders/:orderId/share-tracking
+    router.post('/:orderId/share-tracking', authenticateToken, async (req, res) => {
+        const { orderId } = req.params;
+        const { trackingCode } = req.body;
+        
+        try {
+            const [orders] = await db.query(
+                'SELECT userId FROM orders WHERE id = ?',
+                [orderId]
+            );
+            
+            if (orders.length === 0) {
+                return res.status(404).json({ message: 'Pedido no encontrado' });
+            }
+            
+            if (orders[0].userId !== req.userId && req.userRole !== 'Administrador') {
+                return res.status(403).json({ message: 'No tienes permiso' });
+            }
+            
+            res.json({ message: 'Código de seguimiento listo para compartir', trackingCode });
+        } catch (error) {
+            console.error('Error compartiendo tracking:', error);
+            res.status(500).json({ message: 'Error al compartir código' });
+        }
+    });
+
+    // ========== OBTENER PEDIDOS DEL USUARIO ==========
+    // GET /api/orders
     router.get('/', authenticateToken, async (req, res) => {
         const { status } = req.query;
         let query = 'SELECT * FROM orders WHERE userId = ?';
@@ -110,7 +204,8 @@ module.exports = (db) => {
         }
     });
 
-    // GET /api/orders/:orderId - Obtener detalle de pedido
+    // ========== OBTENER DETALLE DE PEDIDO ==========
+    // GET /api/orders/:orderId
     router.get('/:orderId', authenticateToken, async (req, res) => {
         try {
             const [orders] = await db.query(
@@ -135,7 +230,8 @@ module.exports = (db) => {
         }
     });
 
-    // PATCH /api/orders/:orderId/status - Actualizar estado
+    // ========== ACTUALIZAR ESTADO DEL PEDIDO ==========
+    // PATCH /api/orders/:orderId/status
     router.patch('/:orderId/status', authenticateToken, async (req, res) => {
         const { status } = req.body;
         const validStatuses = ['pending', 'processing', 'shipped', 'delivered', 'cancelled'];
@@ -199,7 +295,8 @@ module.exports = (db) => {
         }
     });
 
-    // GET /api/orders/seller/sales - Ventas del vendedor
+    // ========== VENTAS DEL VENDEDOR ==========
+    // GET /api/orders/seller/sales
     router.get('/seller/sales', authenticateToken, isSeller, async (req, res) => {
         try {
             const [sales] = await db.query(
@@ -226,8 +323,7 @@ module.exports = (db) => {
     });
 
     // ========== CALIFICACIÓN DE VENDEDORES ==========
-    
-    // POST /api/orders/:orderId/rate - Calificar vendedor (solo comprador del pedido)
+    // POST /api/orders/:orderId/rate
     router.post('/:orderId/rate', authenticateToken, isBuyer, async (req, res) => {
         const { rating, comment } = req.body;
         const orderId = req.params.orderId;
@@ -237,7 +333,6 @@ module.exports = (db) => {
         }
         
         try {
-            // Verificar que el pedido pertenece al usuario y está entregado
             const [orders] = await db.query(
                 'SELECT * FROM orders WHERE id = ? AND userId = ? AND status = "delivered"',
                 [orderId, req.userId]
@@ -247,7 +342,6 @@ module.exports = (db) => {
                 return res.status(404).json({ message: 'Pedido no encontrado o no entregado' });
             }
             
-            // Verificar si ya se calificó este pedido
             const [existingRatings] = await db.query(
                 'SELECT id FROM order_items WHERE orderId = ? AND rating IS NOT NULL LIMIT 1',
                 [orderId]
@@ -257,7 +351,6 @@ module.exports = (db) => {
                 return res.status(400).json({ message: 'Este pedido ya ha sido calificado' });
             }
             
-            // Obtener el producto y el vendedor del primer item
             const [orderItems] = await db.query(
                 `SELECT oi.*, p.sellerId, p.sellerName 
                  FROM order_items oi
@@ -272,13 +365,11 @@ module.exports = (db) => {
             
             const item = orderItems[0];
             
-            // Actualizar la calificación en order_items
             await db.query(
                 'UPDATE order_items SET rating = ?, ratingComment = ?, ratedAt = NOW() WHERE orderId = ? AND productId = ?',
                 [rating, comment || null, orderId, item.productId]
             );
             
-            // Calcular nuevo promedio de calificación del vendedor
             const [ratingsSummary] = await db.query(
                 `SELECT AVG(oi.rating) as averageRating, COUNT(oi.rating) as totalRatings
                  FROM order_items oi
@@ -290,13 +381,11 @@ module.exports = (db) => {
             const averageRating = parseFloat(ratingsSummary[0]?.averageRating || 0);
             const totalRatings = ratingsSummary[0]?.totalRatings || 0;
             
-            // Actualizar la calificación del vendedor
             await db.query(
                 'UPDATE users SET calificacion = ?, totalVentas = ? WHERE id = ?',
                 [averageRating, totalRatings, item.sellerId]
             );
             
-            // Notificar al vendedor
             const stars = '★'.repeat(rating) + '☆'.repeat(5 - rating);
             await db.query(
                 `INSERT INTO notifications (userId, title, body, type, isRead, createdAt)
