@@ -5,33 +5,6 @@ const dotenv = require('dotenv');
 
 dotenv.config();
 
-// ============ FIREBASE ADMIN SDK (USANDO VARIABLES DE ENTORNO) ============
-let admin;
-try {
-    admin = require('firebase-admin');
-    
-    // Verificar si tenemos las variables de entorno para Firebase
-    if (process.env.FIREBASE_PROJECT_ID && process.env.FIREBASE_PRIVATE_KEY && process.env.FIREBASE_CLIENT_EMAIL) {
-        try {
-            admin.initializeApp({
-                credential: admin.credential.cert({
-                    projectId: process.env.FIREBASE_PROJECT_ID,
-                    privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'),
-                    clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-                }),
-            });
-            console.log('✅ Firebase Admin SDK inicializado correctamente');
-        } catch (error) {
-            console.error('❌ Error inicializando Firebase Admin SDK:', error.message);
-        }
-    } else {
-        console.warn('⚠️ Firebase no configurado - Las notificaciones push no funcionarán');
-        console.warn('   Agrega las variables: FIREBASE_PROJECT_ID, FIREBASE_PRIVATE_KEY, FIREBASE_CLIENT_EMAIL');
-    }
-} catch (e) {
-    console.log('📦 Firebase Admin SDK no instalado - omitiendo notificaciones push');
-}
-
 if (!process.env.JWT_SECRET) {
     console.warn('⚠️ ADVERTENCIA: JWT_SECRET no definido. Usando valor por defecto');
     process.env.JWT_SECRET = 'bytesnack-super-secret-key-change-in-production';
@@ -234,7 +207,7 @@ async function inicializarBaseDatos() {
         )`);
         console.log('✅ Tabla password_resets verificada');
 
-        // Tabla fcm_tokens
+        // Tabla fcm_tokens (opcional - para notificaciones push)
         await db.query(`CREATE TABLE IF NOT EXISTS fcm_tokens (
             id INT PRIMARY KEY AUTO_INCREMENT,
             userId INT NOT NULL,

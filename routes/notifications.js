@@ -1,12 +1,5 @@
 const express = require('express');
 const { authenticateToken, isAdmin } = require('../middleware/auth');
-const admin = require('firebase-admin');
-
-// Inicializar Firebase Admin SDK (colocar en server.js)
-// const serviceAccount = require('./serviceAccountKey.json');
-// admin.initializeApp({
-//   credential: admin.credential.cert(serviceAccount)
-// });
 
 module.exports = (db) => {
     const router = express.Router();
@@ -82,9 +75,6 @@ module.exports = (db) => {
                      '🆕 Nuevo producto pendiente', 
                      `${sellerName} ha publicado "${productName}". Revisa el producto para aprobarlo.`]
                 );
-                
-                // Enviar push notification
-                await sendPushNotification(admin.id, 'Nuevo producto pendiente', `${sellerName} ha publicado "${productName}"`, 'product_approval');
             }
             res.json({ message: 'Notificaciones enviadas a administradores' });
         } catch (error) {
@@ -113,9 +103,6 @@ module.exports = (db) => {
                 [userId, title, body, type || 'general']
             );
             
-            // Enviar push notification
-            await sendPushNotification(userId, title, body, type || 'general');
-            
             res.json({ message: 'Notificación enviada correctamente' });
         } catch (error) {
             console.error('Error enviando notificación:', error);
@@ -123,8 +110,7 @@ module.exports = (db) => {
         }
     });
 
-    // ========== FCM TOKENS ==========
-    
+    // ========== FCM TOKENS (opcional - solo si se usa Firebase) ==========
     // POST /api/notifications/fcm-token - Guardar token FCM
     router.post('/fcm-token', authenticateToken, async (req, res) => {
         const { token, deviceInfo } = req.body;
@@ -157,32 +143,6 @@ module.exports = (db) => {
             res.status(500).json({ message: 'Error al eliminar token' });
         }
     });
-
-    // Función para enviar push notification
-    async function sendPushNotification(userId, title, body, type, data = {}) {
-        try {
-            const [tokens] = await db.query(
-                'SELECT token FROM fcm_tokens WHERE userId = ?',
-                [userId]
-            );
-            
-            if (tokens.length === 0) return;
-            
-            const message = {
-                notification: { title, body },
-                data: { type, ...data },
-                tokens: tokens.map(t => t.token),
-            };
-            
-            // Enviar a Firebase Cloud Messaging
-            // const response = await admin.messaging().sendEachForMulticast(message);
-            // console.log('Push notifications enviadas:', response);
-            
-            console.log(`📱 Push notification a usuario ${userId}: ${title}`);
-        } catch (error) {
-            console.error('Error enviando push notification:', error);
-        }
-    }
 
     return router;
 };
