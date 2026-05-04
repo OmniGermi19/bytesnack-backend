@@ -48,6 +48,68 @@ module.exports = (db) => {
         }
     });
 
+    // ========== ENDPOINT CON PAGINACIÓN ==========
+    // GET /api/products/paginated - Productos con paginación
+    router.get('/paginated', async (req, res) => {
+        const { category, search, page = 1, limit = 10 } = req.query;
+        const offset = (parseInt(page) - 1) * parseInt(limit);
+        
+        let query = `
+            SELECT p.*, u.nombreCompleto as sellerName
+            FROM products p
+            JOIN users u ON p.sellerId = u.id
+            WHERE p.status = 'approved' AND p.isAvailable = TRUE
+        `;
+        let countQuery = `
+            SELECT COUNT(*) as total
+            FROM products p
+            JOIN users u ON p.sellerId = u.id
+            WHERE p.status = 'approved' AND p.isAvailable = TRUE
+        `;
+        const params = [];
+        
+        if (category && category !== 'Todos') {
+            query += ' AND p.category = ?';
+            countQuery += ' AND p.category = ?';
+            params.push(category);
+        }
+        
+        if (search && search.trim()) {
+            query += ' AND (p.name LIKE ? OR p.description LIKE ?)';
+            countQuery += ' AND (p.name LIKE ? OR p.description LIKE ?)';
+            params.push(`%${search}%`, `%${search}%`);
+        }
+        
+        query += ' ORDER BY p.createdAt DESC LIMIT ? OFFSET ?';
+        params.push(parseInt(limit), offset);
+        
+        try {
+            const [products] = await db.query(query, params);
+            const [countResult] = await db.query(countQuery, params.slice(0, params.length - 2));
+            
+            const parsedProducts = products.map(p => ({
+                ...p,
+                price: parseFloat(p.price),
+                images: typeof p.images === 'string' ? JSON.parse(p.images || '[]') : (p.images || []),
+                isAvailable: p.isAvailable === 1
+            }));
+            
+            const total = countResult[0]?.total || 0;
+            const totalPages = Math.ceil(total / parseInt(limit));
+            
+            res.json({
+                data: parsedProducts,
+                total: total,
+                page: parseInt(page),
+                totalPages: totalPages,
+                limit: parseInt(limit)
+            });
+        } catch (error) {
+            console.error('Error obteniendo productos paginados:', error);
+            res.status(500).json({ message: 'Error al cargar productos' });
+        }
+    });
+
     // GET /api/products/my-products - Obtener TODOS los productos del vendedor autenticado
     router.get('/my-products', authenticateToken, isSeller, async (req, res) => {
         try {
@@ -168,7 +230,6 @@ module.exports = (db) => {
     });
 
     // ========== ENDPOINT PARA OBTENER STOCK ==========
-    // GET /api/products/:id/stock - Obtener stock de un producto
     router.get('/:id/stock', authenticateToken, async (req, res) => {
         const productId = req.params.id;
         
