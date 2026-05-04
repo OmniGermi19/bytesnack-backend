@@ -15,7 +15,6 @@ module.exports = (db) => {
     }
 
     // ========== CREAR PEDIDO ==========
-    // POST /api/orders
     router.post('/', authenticateToken, isBuyer, async (req, res) => {
         const { items, total, paymentMethod, shippingAddress } = req.body;
 
@@ -44,7 +43,7 @@ module.exports = (db) => {
                 }
             }
 
-            // ✅ Generar código de seguimiento único
+            // Generar código de seguimiento único
             let trackingCode;
             let isUnique = false;
             while (!isUnique) {
@@ -56,7 +55,7 @@ module.exports = (db) => {
                 if (existing.length === 0) isUnique = true;
             }
 
-            // ✅ Insertar pedido con código de seguimiento
+            // Insertar pedido con código de seguimiento
             const [orderResult] = await db.query(
                 `INSERT INTO orders (userId, total, paymentMethod, shippingAddress, status, tracking_code, createdAt, updatedAt)
                  VALUES (?, ?, ?, ?, 'pending', ?, NOW(), NOW())`,
@@ -65,7 +64,6 @@ module.exports = (db) => {
 
             const orderId = orderResult.insertId;
             
-            // Insertar items del pedido
             const orderItems = items.map(item => [
                 orderId, item.productId, item.name, item.quantity, item.price, item.imageUrl || null
             ]);
@@ -75,7 +73,6 @@ module.exports = (db) => {
                 [orderItems]
             );
 
-            // Actualizar stock
             for (const item of items) {
                 await db.query(
                     'UPDATE products SET stock = stock - ? WHERE id = ?',
@@ -83,10 +80,8 @@ module.exports = (db) => {
                 );
             }
 
-            // Vaciar carrito
             await db.query('DELETE FROM cart_items WHERE userId = ?', [req.userId]);
 
-            // Notificar a vendedores
             for (const item of items) {
                 const [products] = await db.query('SELECT sellerId, sellerName FROM products WHERE id = ?', [item.productId]);
                 if (products.length > 0) {
@@ -113,7 +108,6 @@ module.exports = (db) => {
     });
 
     // ========== RASTREAR PEDIDO POR CÓDIGO ==========
-    // GET /api/orders/track/:trackingCode
     router.get('/track/:trackingCode', authenticateToken, async (req, res) => {
         const { trackingCode } = req.params;
         
@@ -146,7 +140,6 @@ module.exports = (db) => {
     });
 
     // ========== COMPARTIR CÓDIGO DE SEGUIMIENTO ==========
-    // POST /api/orders/:orderId/share-tracking
     router.post('/:orderId/share-tracking', authenticateToken, async (req, res) => {
         const { orderId } = req.params;
         const { trackingCode } = req.body;
@@ -173,7 +166,6 @@ module.exports = (db) => {
     });
 
     // ========== OBTENER PEDIDOS DEL USUARIO ==========
-    // GET /api/orders
     router.get('/', authenticateToken, async (req, res) => {
         const { status } = req.query;
         let query = 'SELECT * FROM orders WHERE userId = ?';
@@ -205,7 +197,6 @@ module.exports = (db) => {
     });
 
     // ========== OBTENER DETALLE DE PEDIDO ==========
-    // GET /api/orders/:orderId
     router.get('/:orderId', authenticateToken, async (req, res) => {
         try {
             const [orders] = await db.query(
@@ -231,7 +222,6 @@ module.exports = (db) => {
     });
 
     // ========== ACTUALIZAR ESTADO DEL PEDIDO ==========
-    // PATCH /api/orders/:orderId/status
     router.patch('/:orderId/status', authenticateToken, async (req, res) => {
         const { status } = req.body;
         const validStatuses = ['pending', 'processing', 'shipped', 'delivered', 'cancelled'];
@@ -296,7 +286,6 @@ module.exports = (db) => {
     });
 
     // ========== VENTAS DEL VENDEDOR ==========
-    // GET /api/orders/seller/sales
     router.get('/seller/sales', authenticateToken, isSeller, async (req, res) => {
         try {
             const [sales] = await db.query(
@@ -323,7 +312,6 @@ module.exports = (db) => {
     });
 
     // ========== CALIFICACIÓN DE VENDEDORES ==========
-    // POST /api/orders/:orderId/rate
     router.post('/:orderId/rate', authenticateToken, isBuyer, async (req, res) => {
         const { rating, comment } = req.body;
         const orderId = req.params.orderId;
@@ -347,7 +335,7 @@ module.exports = (db) => {
                 [orderId]
             );
             
-            if (existingRatings.length > 0) {
+            if (existingRatings.length === 0) {
                 return res.status(400).json({ message: 'Este pedido ya ha sido calificado' });
             }
             
