@@ -6,6 +6,36 @@ const dotenv = require('dotenv');
 
 dotenv.config();
 
+// ============ FIREBASE ADMIN SDK ============
+const admin = require('firebase-admin');
+
+// Configuración de Firebase desde variables de entorno
+// En Railway, agrega estas variables con los valores de tu JSON
+const firebaseConfig = {
+    type: "service_account",
+    projectId: process.env.FIREBASE_PROJECT_ID || "bytesnack-3df71",
+    privateKeyId: process.env.FIREBASE_PRIVATE_KEY_ID,
+    privateKey: (process.env.FIREBASE_PRIVATE_KEY || "").replace(/\\n/g, '\n'),
+    clientEmail: process.env.FIREBASE_CLIENT_EMAIL || "firebase-adminsdk-fbsvc@bytesnack-3df71.iam.gserviceaccount.com",
+    clientId: process.env.FIREBASE_CLIENT_ID,
+    authUri: "https://accounts.google.com/o/oauth2/auth",
+    tokenUri: "https://oauth2.googleapis.com/token",
+    authProviderX509CertUrl: "https://www.googleapis.com/oauth2/v1/certs",
+    clientX509CertUrl: process.env.FIREBASE_CLIENT_X509_CERT_URL,
+    universeDomain: "googleapis.com"
+};
+
+// Inicializar Firebase Admin SDK
+try {
+    admin.initializeApp({
+        credential: admin.credential.cert(firebaseConfig),
+    });
+    console.log('✅ Firebase Admin SDK inicializado correctamente');
+} catch (error) {
+    console.error('❌ Error inicializando Firebase Admin SDK:', error.message);
+    console.warn('⚠️ Las notificaciones push no funcionarán');
+}
+
 if (!process.env.JWT_SECRET) {
     console.warn('⚠️ ADVERTENCIA: JWT_SECRET no definido. Usando valor por defecto');
     process.env.JWT_SECRET = 'bytesnack-super-secret-key-change-in-production';
@@ -145,6 +175,9 @@ async function inicializarBaseDatos() {
             quantity INT NOT NULL,
             price DECIMAL(10,2) NOT NULL,
             imageUrl VARCHAR(500),
+            rating INT CHECK (rating >= 1 AND rating <= 5),
+            ratingComment TEXT,
+            ratedAt TIMESTAMP NULL,
             FOREIGN KEY (orderId) REFERENCES orders(id) ON DELETE CASCADE,
             INDEX idx_orderId (orderId)
         )`);
@@ -183,6 +216,7 @@ async function inicializarBaseDatos() {
         )`);
         console.log('✅ Tabla pending_profile_changes verificada');
 
+<<<<<<< HEAD
         await db.query(`CREATE TABLE IF NOT EXISTS tracking_sessions (
             id INT PRIMARY KEY AUTO_INCREMENT,
             orderId INT UNIQUE NOT NULL,
@@ -216,6 +250,37 @@ async function inicializarBaseDatos() {
         )`);
         console.log('✅ Tabla tracking_locations verificada');
 
+=======
+        // Tabla password_resets
+        await db.query(`CREATE TABLE IF NOT EXISTS password_resets (
+            id INT PRIMARY KEY AUTO_INCREMENT,
+            userId INT NOT NULL,
+            token VARCHAR(255) NOT NULL UNIQUE,
+            expiresAt TIMESTAMP NOT NULL,
+            used BOOLEAN DEFAULT FALSE,
+            createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (userId) REFERENCES users(id) ON DELETE CASCADE,
+            INDEX idx_token (token),
+            INDEX idx_expiresAt (expiresAt)
+        )`);
+        console.log('✅ Tabla password_resets verificada');
+
+        // Tabla fcm_tokens
+        await db.query(`CREATE TABLE IF NOT EXISTS fcm_tokens (
+            id INT PRIMARY KEY AUTO_INCREMENT,
+            userId INT NOT NULL,
+            token VARCHAR(255) NOT NULL UNIQUE,
+            deviceInfo VARCHAR(255),
+            createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            FOREIGN KEY (userId) REFERENCES users(id) ON DELETE CASCADE,
+            INDEX idx_userId (userId),
+            INDEX idx_token (token)
+        )`);
+        console.log('✅ Tabla fcm_tokens verificada');
+
+        // Crear administrador por defecto si no existe
+>>>>>>> 126d5db223a055c833249b7d7f03cd19563f953e
         const [admins] = await db.query('SELECT id FROM users WHERE role = "Administrador" LIMIT 1');
         if (admins.length === 0) {
             const bcrypt = require('bcryptjs');

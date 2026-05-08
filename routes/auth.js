@@ -1,6 +1,7 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
 
 module.exports = (db) => {
     const router = express.Router();
@@ -71,7 +72,7 @@ module.exports = (db) => {
             // Los compradores se crean activos, los vendedores pendientes
             const isActive = role === 'Comprador';
 
-            // Procesar credencialFotos (pueden venir como Base64 o rutas)
+            // Procesar credencialFotos
             let credencialFotosJson = null;
             if (credencialFotos && Array.isArray(credencialFotos)) {
                 credencialFotosJson = JSON.stringify(credencialFotos);
@@ -97,7 +98,6 @@ module.exports = (db) => {
                 { expiresIn: '7d' }
             );
 
-            // Generar refresh token
             const refreshToken = jwt.sign(
                 { userId: result.insertId },
                 process.env.JWT_SECRET,
@@ -136,7 +136,6 @@ module.exports = (db) => {
         }
 
         try {
-            // Buscar usuario
             const [users] = await db.query(
                 `SELECT id, role, numeroControl, nombreCompleto, carrera, email, telefono,
                         password, codigoAcceso, isVendedorTambien, createdAt, isActive, 
@@ -151,17 +150,14 @@ module.exports = (db) => {
 
             const user = users[0];
 
-            // Verificar si usuario está activo
             if (!user.isActive) {
                 return res.status(401).json({ message: 'Cuenta desactivada o pendiente de aprobación. Contacta al administrador.' });
             }
 
-            // Verificar rol
             if (user.role !== role) {
                 return res.status(401).json({ message: `No tienes una cuenta de ${role}` });
             }
 
-            // Verificar credenciales según rol
             let isValid = false;
 
             if (role === 'Administrador') {
@@ -178,21 +174,18 @@ module.exports = (db) => {
                 return res.status(401).json({ message: 'Credenciales incorrectas' });
             }
 
-            // Generar token
             const token = jwt.sign(
                 { userId: user.id, role: user.role },
                 process.env.JWT_SECRET,
                 { expiresIn: '7d' }
             );
 
-            // Generar refresh token
             const refreshToken = jwt.sign(
                 { userId: user.id },
                 process.env.JWT_SECRET,
                 { expiresIn: '30d' }
             );
 
-            // Remover datos sensibles
             delete user.password;
             delete user.codigoAcceso;
 
@@ -246,6 +239,135 @@ module.exports = (db) => {
     // POST /api/auth/logout - Cerrar sesión
     router.post('/logout', (req, res) => {
         res.json({ message: 'Sesión cerrada exitosamente' });
+    });
+
+    // ========== RECUPERACIÓN DE CONTRASEÑA ==========
+    
+    // POST /api/auth/forgot-password - Solicitar restablecimiento
+    router.post('/forgot-password', async (req, res) => {
+        const { email } = req.body;
+        
+        if (!email) {
+            return res.status(400).json({ message: 'El correo electrónico es requerido' });
+        }
+        
+        try {
+            // Buscar usuario por email
+            const [users] = await db.query(
+                'SELECT id, nombreCompleto FROM users WHERE email = ?',
+                [email]
+            );
+            
+            if (users.length === 0) {
+                // Por seguridad, no revelamos si el email existe o no
+                return res.json({ message: 'Si el correo existe, recibirás un enlace de recuperación' });
+            }
+            
+            const user = users[0];
+            
+            // Generar token único
+            const token = crypto.randomBytes(32).toString('hex');
+            const expiresAt = new Date();
+            expiresAt.setHours(expiresAt.getHours() + 1); // Expira en 1 hora
+            
+            // Guardar token en la base de datos
+            await db.query(
+                `INSERT INTO password_resets (userId, token, expiresAt, used, createdAt)
+                 VALUES (?, ?, ?, FALSE, NOW())`,
+                [user.id, token, expiresAt]
+            );
+            
+            console.log(`🔐 Token de recuperación para ${user.nombreCompleto} (${email}): ${token}`);
+            console.log(`🔗 Enlace: /reset_password?token=${token}`);
+            
+            // En producción, aquí enviarías un correo electrónico
+            // await sendEmail(email, 'Recuperación de contraseña', 
+            //   `Haz clic en el siguiente enlace para restablecer tu contraseña:\n\n
+            //    https://tu-app.com/reset-password?token=${token}\n\n
+            //    Este enlace expirará en 1 hora.`);
+            
+            res.json({ 
+                message: 'Si el correo existe, recibirás un enlace de recuperación',
+                token: token // Solo en desarrollo, eliminar en producción
+            });
+        } catch (error) {
+            console.error('Error en forgot-password:', error);
+            res.status(500).json({ message: 'Error al procesar la solicitud' });
+        }
+    });
+    
+    // POST /api/auth/verify-reset-token - Verificar token
+    router.post('/verify-reset-token', async (req, res) => {
+        const { token } = req.body;
+        
+        if (!token) {
+            return res.status(400).json({ message: 'Token requerido' });
+        }
+        
+        try {
+            const [resets] = await db.query(
+                `SELECT * FROM password_resets 
+                 WHERE token = ? AND used = FALSE AND expiresAt > NOW()`,
+                [token]
+            );
+            
+            if (resets.length === 0) {
+                return res.status(400).json({ message: 'Token inválido o expirado' });
+            }
+            
+            res.json({ message: 'Token válido' });
+        } catch (error) {
+            console.error('Error en verify-reset-token:', error);
+            res.status(500).json({ message: 'Error al verificar el token' });
+        }
+    });
+    
+    // POST /api/auth/reset-password - Restablecer contraseña
+    router.post('/reset-password', async (req, res) => {
+        const { token, password } = req.body;
+        
+        if (!token || !password) {
+            return res.status(400).json({ message: 'Token y contraseña son requeridos' });
+        }
+        
+        if (password.length < 6) {
+            return res.status(400).json({ message: 'La contraseña debe tener al menos 6 caracteres' });
+        }
+        
+        try {
+            // Verificar token
+            const [resets] = await db.query(
+                `SELECT * FROM password_resets 
+                 WHERE token = ? AND used = FALSE AND expiresAt > NOW()`,
+                [token]
+            );
+            
+            if (resets.length === 0) {
+                return res.status(400).json({ message: 'Token inválido o expirado' });
+            }
+            
+            const reset = resets[0];
+            
+            // Hashear nueva contraseña
+            const hashedPassword = await bcrypt.hash(password, 10);
+            
+            // Actualizar contraseña del usuario
+            await db.query(
+                'UPDATE users SET password = ?, updatedAt = NOW() WHERE id = ?',
+                [hashedPassword, reset.userId]
+            );
+            
+            // Marcar token como usado
+            await db.query(
+                'UPDATE password_resets SET used = TRUE WHERE id = ?',
+                [reset.id]
+            );
+            
+            res.json({ message: 'Contraseña restablecida correctamente' });
+        } catch (error) {
+            console.error('Error en reset-password:', error);
+            res.status(500).json({ message: 'Error al restablecer la contraseña' });
+        }
     });
 
     return router;
