@@ -1,4 +1,5 @@
 const express = require('express');
+const http = require('http');
 const mysql = require('mysql2');
 const cors = require('cors');
 const dotenv = require('dotenv');
@@ -13,11 +14,9 @@ if (!process.env.JWT_SECRET) {
 const app = express();
 
 app.use(cors());
-// Aumentar límite para imágenes grandes
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-// Log para ver el tamaño de las peticiones
 app.use((req, res, next) => {
     if (req.method === 'POST' || req.method === 'PUT') {
         const contentLength = req.headers['content-length'];
@@ -63,7 +62,6 @@ pool.getConnection((err, connection) => {
 
 async function inicializarBaseDatos() {
     try {
-        // Tabla users
         await db.query(`CREATE TABLE IF NOT EXISTS users (
             id INT PRIMARY KEY AUTO_INCREMENT,
             role ENUM('Comprador', 'Vendedor', 'Administrador') NOT NULL DEFAULT 'Comprador',
@@ -90,7 +88,6 @@ async function inicializarBaseDatos() {
         )`);
         console.log('✅ Tabla users verificada');
 
-        // Tabla products
         await db.query(`CREATE TABLE IF NOT EXISTS products (
             id INT PRIMARY KEY AUTO_INCREMENT,
             name VARCHAR(200) NOT NULL,
@@ -113,7 +110,6 @@ async function inicializarBaseDatos() {
         )`);
         console.log('✅ Tabla products verificada');
 
-        // Tabla cart_items
         await db.query(`CREATE TABLE IF NOT EXISTS cart_items (
             id INT PRIMARY KEY AUTO_INCREMENT,
             userId INT NOT NULL,
@@ -126,7 +122,6 @@ async function inicializarBaseDatos() {
         )`);
         console.log('✅ Tabla cart_items verificada');
 
-        // Tabla orders
         await db.query(`CREATE TABLE IF NOT EXISTS orders (
             id INT PRIMARY KEY AUTO_INCREMENT,
             userId INT NOT NULL,
@@ -142,7 +137,6 @@ async function inicializarBaseDatos() {
         )`);
         console.log('✅ Tabla orders verificada');
 
-        // Tabla order_items
         await db.query(`CREATE TABLE IF NOT EXISTS order_items (
             id INT PRIMARY KEY AUTO_INCREMENT,
             orderId INT NOT NULL,
@@ -156,7 +150,6 @@ async function inicializarBaseDatos() {
         )`);
         console.log('✅ Tabla order_items verificada');
 
-        // Tabla notifications
         await db.query(`CREATE TABLE IF NOT EXISTS notifications (
             id INT PRIMARY KEY AUTO_INCREMENT,
             userId INT NOT NULL,
@@ -171,7 +164,6 @@ async function inicializarBaseDatos() {
         )`);
         console.log('✅ Tabla notifications verificada');
 
-        // Tabla pending_profile_changes
         await db.query(`CREATE TABLE IF NOT EXISTS pending_profile_changes (
             id INT PRIMARY KEY AUTO_INCREMENT,
             userId INT NOT NULL,
@@ -191,7 +183,39 @@ async function inicializarBaseDatos() {
         )`);
         console.log('✅ Tabla pending_profile_changes verificada');
 
-        // Crear administrador por defecto si no existe
+        await db.query(`CREATE TABLE IF NOT EXISTS tracking_sessions (
+            id INT PRIMARY KEY AUTO_INCREMENT,
+            orderId INT UNIQUE NOT NULL,
+            sellerId INT NULL,
+            status ENUM('pending', 'active', 'ended') DEFAULT 'pending',
+            startedAt TIMESTAMP NULL,
+            endedAt TIMESTAMP NULL,
+            lastLat DECIMAL(10,8) NULL,
+            lastLng DECIMAL(11,8) NULL,
+            lastAddress TEXT NULL,
+            lastLocationUpdate TIMESTAMP NULL,
+            createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            FOREIGN KEY (orderId) REFERENCES orders(id) ON DELETE CASCADE,
+            FOREIGN KEY (sellerId) REFERENCES users(id) ON DELETE SET NULL,
+            INDEX idx_orderId (orderId),
+            INDEX idx_status (status)
+        )`);
+        console.log('✅ Tabla tracking_sessions verificada');
+
+        await db.query(`CREATE TABLE IF NOT EXISTS tracking_locations (
+            id INT PRIMARY KEY AUTO_INCREMENT,
+            orderId INT NOT NULL,
+            lat DECIMAL(10,8) NOT NULL,
+            lng DECIMAL(11,8) NOT NULL,
+            address TEXT,
+            createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (orderId) REFERENCES orders(id) ON DELETE CASCADE,
+            INDEX idx_orderId (orderId),
+            INDEX idx_createdAt (createdAt)
+        )`);
+        console.log('✅ Tabla tracking_locations verificada');
+
         const [admins] = await db.query('SELECT id FROM users WHERE role = "Administrador" LIMIT 1');
         if (admins.length === 0) {
             const bcrypt = require('bcryptjs');
@@ -226,7 +250,6 @@ const cartRouter = require('./routes/cart')(db);
 const salesRouter = require('./routes/sales')(db);
 const notificationsRouter = require('./routes/notifications')(db);
 
-// Usar routers
 app.use('/api/auth', authRouter);
 app.use('/api/products', productsRouter);
 app.use('/api/admin', adminRouter);
@@ -236,7 +259,15 @@ app.use('/api/cart', cartRouter);
 app.use('/api/sales', salesRouter);
 app.use('/api/notifications', notificationsRouter);
 
-// Manejo de rutas no encontradas
+// Tracking
+const TrackingService = require('./services/trackingService');
+const trackingRouter = require('./routes/tracking');
+
+const server = http.createServer(app);
+const trackingService = new TrackingService(server);
+const trackingRoutes = trackingRouter(db, trackingService);
+app.use('/api/tracking', trackingRoutes);
+
 app.use('*', (req, res) => {
     res.status(404).json({ 
         error: 'Ruta no encontrada', 
@@ -245,8 +276,9 @@ app.use('*', (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
+server.listen(PORT, () => {
     console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
     console.log(`📡 API disponible en: http://localhost:${PORT}/api`);
+    console.log(`🔌 WebSocket disponible en: ws://localhost:${PORT}/ws/tracking`);
     console.log(`❤️ Health check: http://localhost:${PORT}/api/health`);
 });

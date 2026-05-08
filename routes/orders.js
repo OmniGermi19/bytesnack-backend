@@ -4,7 +4,6 @@ const { authenticateToken, isBuyer, isSeller } = require('../middleware/auth');
 module.exports = (db) => {
     const router = express.Router();
 
-    // POST /api/orders - Crear pedido
     router.post('/', authenticateToken, isBuyer, async (req, res) => {
         const { items, total, paymentMethod, shippingAddress } = req.body;
 
@@ -39,6 +38,12 @@ module.exports = (db) => {
             );
 
             const orderId = orderResult.insertId;
+            
+            await db.query(
+                `INSERT INTO tracking_sessions (orderId, status, createdAt)
+                 VALUES (?, 'pending', NOW())`,
+                [orderId]
+            );
             
             const orderItems = items.map(item => [
                 orderId, item.productId, item.name, item.quantity, item.price, item.imageUrl || null
@@ -79,7 +84,6 @@ module.exports = (db) => {
         }
     });
 
-    // GET /api/orders - Obtener pedidos del usuario
     router.get('/', authenticateToken, async (req, res) => {
         const { status } = req.query;
         let query = 'SELECT * FROM orders WHERE userId = ?';
@@ -110,7 +114,6 @@ module.exports = (db) => {
         }
     });
 
-    // GET /api/orders/:orderId - Obtener detalle de pedido
     router.get('/:orderId', authenticateToken, async (req, res) => {
         try {
             const [orders] = await db.query(
@@ -135,7 +138,6 @@ module.exports = (db) => {
         }
     });
 
-    // PATCH /api/orders/:orderId/status - Actualizar estado
     router.patch('/:orderId/status', authenticateToken, async (req, res) => {
         const { status } = req.body;
         const validStatuses = ['pending', 'processing', 'shipped', 'delivered', 'cancelled'];
@@ -199,7 +201,6 @@ module.exports = (db) => {
         }
     });
 
-    // GET /api/orders/seller/sales - Ventas del vendedor
     router.get('/seller/sales', authenticateToken, isSeller, async (req, res) => {
         try {
             const [sales] = await db.query(
