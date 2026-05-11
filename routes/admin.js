@@ -170,7 +170,6 @@ module.exports = (db) => {
 
     // ========== CAMBIOS DE PERFIL PENDIENTES ==========
     
-    // GET /api/admin/pending-profile-changes - Obtener cambios de perfil pendientes
     router.get('/pending-profile-changes', authenticateToken, isAdmin, async (req, res) => {
         try {
             const [changes] = await db.query(
@@ -191,14 +190,12 @@ module.exports = (db) => {
         }
     });
 
-    // POST /api/admin/approve-profile-change - Aprobar/Rechazar cambio de perfil
     router.post('/approve-profile-change', authenticateToken, isAdmin, async (req, res) => {
         const { changeId, approved, rejectionReason } = req.body;
         
         console.log('📡 [ADMIN] Procesando cambio de perfil:', changeId, approved ? 'Aprobar' : 'Rechazar');
         
         try {
-            // Obtener el cambio pendiente
             const [changes] = await db.query(
                 `SELECT * FROM pending_profile_changes WHERE id = ?`,
                 [changeId]
@@ -212,7 +209,6 @@ module.exports = (db) => {
             const status = approved ? 'approved' : 'rejected';
             
             if (approved) {
-                // Aplicar los cambios al usuario
                 const updates = [];
                 const params = [];
                 
@@ -250,7 +246,6 @@ module.exports = (db) => {
                 }
             }
             
-            // Actualizar el estado del cambio
             await db.query(
                 `UPDATE pending_profile_changes 
                  SET status = ?, reviewedAt = NOW(), rejectionReason = ?
@@ -258,7 +253,6 @@ module.exports = (db) => {
                 [status, approved ? null : (rejectionReason || 'No especificado'), changeId]
             );
             
-            // Notificar al usuario
             const title = approved ? '✅ Cambios aprobados' : '❌ Cambios rechazados';
             const message = approved 
                 ? 'Los cambios solicitados en tu perfil han sido aprobados y aplicados.'
@@ -274,6 +268,79 @@ module.exports = (db) => {
         } catch (error) {
             console.error('❌ Error procesando cambio de perfil:', error);
             res.status(500).json({ message: 'Error al procesar el cambio' });
+        }
+    });
+
+    // ========== GESTIÓN DE PRODUCTOS (ADMIN) ==========
+    
+    router.put('/hide-product/:id', authenticateToken, isAdmin, async (req, res) => {
+        const { id } = req.params;
+        const { reason } = req.body;
+
+        try {
+            const [product] = await db.query(
+                'SELECT name, sellerId, sellerName FROM products WHERE id = ?',
+                [id]
+            );
+
+            if (product.length === 0) {
+                return res.status(404).json({ message: 'Producto no encontrado' });
+            }
+
+            await db.query(
+                `UPDATE products 
+                 SET isAvailable = FALSE, isHidden = TRUE, hiddenReason = ?, hiddenAt = NOW() 
+                 WHERE id = ?`,
+                [reason || 'Ocultado por el administrador', id]
+            );
+
+            await db.query(
+                `INSERT INTO notifications (userId, title, body, type, isRead, createdAt)
+                 VALUES (?, ?, ?, 'product_status', FALSE, NOW())`,
+                [product[0].sellerId,
+                 '🚫 Producto ocultado',
+                 `Tu producto "${product[0].name}" ha sido ocultado por el administrador. Motivo: ${reason || 'No especificado'}`]
+            );
+
+            res.json({ success: true, message: 'Producto ocultado correctamente' });
+        } catch (error) {
+            console.error('Error ocultando producto:', error);
+            res.status(500).json({ message: 'Error al ocultar producto' });
+        }
+    });
+
+    router.put('/restore-product/:id', authenticateToken, isAdmin, async (req, res) => {
+        const { id } = req.params;
+
+        try {
+            const [product] = await db.query(
+                'SELECT name, sellerId, sellerName FROM products WHERE id = ?',
+                [id]
+            );
+
+            if (product.length === 0) {
+                return res.status(404).json({ message: 'Producto no encontrado' });
+            }
+
+            await db.query(
+                `UPDATE products 
+                 SET isAvailable = TRUE, isHidden = FALSE, hiddenReason = NULL, hiddenAt = NULL 
+                 WHERE id = ?`,
+                [id]
+            );
+
+            await db.query(
+                `INSERT INTO notifications (userId, title, body, type, isRead, createdAt)
+                 VALUES (?, ?, ?, 'product_status', FALSE, NOW())`,
+                [product[0].sellerId,
+                 '✅ Producto restaurado',
+                 `Tu producto "${product[0].name}" ha sido restaurado y ya está visible nuevamente.`]
+            );
+
+            res.json({ success: true, message: 'Producto restaurado correctamente' });
+        } catch (error) {
+            console.error('Error restaurando producto:', error);
+            res.status(500).json({ message: 'Error al restaurar producto' });
         }
     });
 

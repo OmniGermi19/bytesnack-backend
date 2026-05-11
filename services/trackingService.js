@@ -93,7 +93,7 @@ class TrackingService {
                 this.joinTrackingSession(userId, message.orderId, ws);
                 break;
             case 'update_location':
-                this.updateLocation(userId, message.orderId, message.lat, message.lng, message.address, ws);
+                this.updateLocation(userId, message.orderId, message.lat, message.lng, message.address, message.speed, message.accuracy, ws);
                 break;
             case 'stop_tracking':
                 this.stopTrackingSession(userId, message.orderId);
@@ -164,6 +164,8 @@ class TrackingService {
                 lat: currentLocation.lat,
                 lng: currentLocation.lng,
                 address: currentLocation.address,
+                speed: currentLocation.speed,
+                accuracy: currentLocation.accuracy,
                 lastUpdate: currentLocation.lastUpdate,
                 sellerName: currentLocation.sellerName
             }));
@@ -176,13 +178,15 @@ class TrackingService {
         console.log(`👥 Comprador ${buyerId} se unió al pedido ${orderId}`);
     }
 
-    updateLocation(sellerId, orderId, lat, lng, address, ws) {
+    updateLocation(sellerId, orderId, lat, lng, address, speed, accuracy, ws) {
         const session = this.trackingSessions.get(orderId);
         if (!session || session.sellerId !== sellerId) return;
         this.orderLocations.set(orderId, {
             lat: lat,
             lng: lng,
             address: address || 'Ubicación actual',
+            speed: speed,
+            accuracy: accuracy,
             lastUpdate: new Date().toISOString(),
             sellerName: session.sellerName
         });
@@ -193,6 +197,8 @@ class TrackingService {
                 lat: lat,
                 lng: lng,
                 address: address,
+                speed: speed,
+                accuracy: accuracy,
                 lastUpdate: new Date().toISOString()
             }));
         }

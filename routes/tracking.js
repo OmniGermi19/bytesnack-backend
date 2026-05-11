@@ -11,10 +11,11 @@ module.exports = (db, trackingService) => {
         }
         try {
             const [orders] = await db.query(
-                `SELECT o.id, o.status, p.sellerId, p.sellerName
+                `SELECT o.id, o.status, p.sellerId, p.sellerName, u.nombreCompleto as sellerNameFull
                  FROM orders o
                  JOIN order_items oi ON o.id = oi.orderId
                  JOIN products p ON oi.productId = p.id
+                 JOIN users u ON p.sellerId = u.id
                  WHERE o.id = ? AND p.sellerId = ? LIMIT 1`,
                 [orderId, req.userId]
             );
@@ -31,7 +32,7 @@ module.exports = (db, trackingService) => {
                  ON DUPLICATE KEY UPDATE status = 'active', updatedAt = NOW()`,
                 [orderId, req.userId]
             );
-            trackingService.setSellerName(orderId, order.sellerName);
+            trackingService.setSellerName(orderId, order.sellerNameFull);
             res.json({ success: true, message: 'Seguimiento iniciado' });
         } catch (error) {
             console.error('Error iniciando tracking:', error);
@@ -43,7 +44,8 @@ module.exports = (db, trackingService) => {
         const { orderId } = req.body;
         try {
             await db.query(
-                `UPDATE tracking_sessions SET status = 'ended', endedAt = NOW() WHERE orderId = ? AND sellerId = ?`,
+                `UPDATE tracking_sessions SET status = 'ended', endedAt = NOW() 
+                 WHERE orderId = ? AND sellerId = ?`,
                 [orderId, req.userId]
             );
             res.json({ success: true, message: 'Seguimiento detenido' });
@@ -54,21 +56,25 @@ module.exports = (db, trackingService) => {
     });
 
     router.post('/location', authenticateToken, isSeller, async (req, res) => {
-        const { orderId, lat, lng, address } = req.body;
+        const { orderId, lat, lng, address, speed, accuracy } = req.body;
         if (!orderId || lat === undefined || lng === undefined) {
             return res.status(400).json({ message: 'Datos incompletos' });
         }
+
         try {
             await db.query(
-                `UPDATE tracking_sessions SET lastLat = ?, lastLng = ?, lastAddress = ?, lastLocationUpdate = NOW()
+                `UPDATE tracking_sessions 
+                 SET lastLat = ?, lastLng = ?, lastAddress = ?, lastSpeed = ?, lastAccuracy = ?, lastLocationUpdate = NOW()
                  WHERE orderId = ? AND sellerId = ?`,
-                [lat, lng, address || null, orderId, req.userId]
+                [lat, lng, address || null, speed || null, accuracy || null, orderId, req.userId]
             );
+
             await db.query(
-                `INSERT INTO tracking_locations (orderId, lat, lng, address, createdAt)
-                 VALUES (?, ?, ?, ?, NOW())`,
-                [orderId, lat, lng, address || null]
+                `INSERT INTO tracking_locations (orderId, lat, lng, address, speed, accuracy, createdAt)
+                 VALUES (?, ?, ?, ?, ?, ?, NOW())`,
+                [orderId, lat, lng, address || null, speed || null, accuracy || null]
             );
+
             res.json({ success: true });
         } catch (error) {
             console.error('Error guardando ubicación:', error);
@@ -106,12 +112,33 @@ module.exports = (db, trackingService) => {
                     lat: session.lastLat,
                     lng: session.lastLng,
                     address: session.lastAddress,
+                    speed: session.lastSpeed,
+                    accuracy: session.lastAccuracy,
                     updatedAt: session.lastLocationUpdate
                 } : null
             });
         } catch (error) {
             console.error('Error:', error);
             res.status(500).json({ message: 'Error al obtener estado' });
+        }
+    });
+
+    router.get('/history/:orderId', authenticateToken, async (req, res) => {
+        const { orderId } = req.params;
+        const { limit = 50 } = req.query;
+        try {
+            const [locations] = await db.query(
+                `SELECT lat, lng, address, speed, accuracy, createdAt
+                 FROM tracking_locations
+                 WHERE orderId = ?
+                 ORDER BY createdAt DESC
+                 LIMIT ?`,
+                [orderId, parseInt(limit)]
+            );
+            res.json({ locations: locations.reverse() });
+        } catch (error) {
+            console.error('Error obteniendo historial:', error);
+            res.status(500).json({ message: 'Error al obtener historial' });
         }
     });
 
