@@ -181,6 +181,97 @@ async function inicializarBaseDatos() {
             INDEX idx_userId (userId),
             INDEX idx_status (status)
         )`);
+        // TABLA DE CALIFICACIONES Y RESEÑAS
+await db.query(`CREATE TABLE IF NOT EXISTS reviews (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    orderId INT NOT NULL,
+    productId INT NOT NULL,
+    productName VARCHAR(200) NOT NULL,
+    userId INT NOT NULL,
+    userName VARCHAR(100) NOT NULL,
+    rating DECIMAL(2,1) NOT NULL,
+    comment TEXT,
+    images LONGTEXT,
+    isVerifiedPurchase BOOLEAN DEFAULT FALSE,
+    likes INT DEFAULT 0,
+    createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (orderId) REFERENCES orders(id) ON DELETE CASCADE,
+    FOREIGN KEY (productId) REFERENCES products(id) ON DELETE CASCADE,
+    FOREIGN KEY (userId) REFERENCES users(id) ON DELETE CASCADE,
+    INDEX idx_productId (productId),
+    INDEX idx_userId (userId),
+    INDEX idx_rating (rating)
+)`);
+console.log('✅ Tabla reviews verificada');
+
+// TABLA DE MENSAJES Y CHATS
+await db.query(`CREATE TABLE IF NOT EXISTS chats (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    orderId INT NOT NULL,
+    productId INT NOT NULL,
+    productName VARCHAR(200) NOT NULL,
+    buyerId INT NOT NULL,
+    sellerId INT NOT NULL,
+    lastMessage TEXT,
+    lastMessageTime TIMESTAMP NULL,
+    buyerUnreadCount INT DEFAULT 0,
+    sellerUnreadCount INT DEFAULT 0,
+    status ENUM('active', 'closed') DEFAULT 'active',
+    createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (orderId) REFERENCES orders(id) ON DELETE CASCADE,
+    FOREIGN KEY (buyerId) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (sellerId) REFERENCES users(id) ON DELETE CASCADE,
+    INDEX idx_orderId (orderId),
+    INDEX idx_buyerId (buyerId),
+    INDEX idx_sellerId (sellerId),
+    UNIQUE KEY unique_chat (orderId, productId)
+)`);
+console.log('✅ Tabla chats verificada');
+
+await db.query(`CREATE TABLE IF NOT EXISTS messages (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    chatId INT NOT NULL,
+    senderId INT NOT NULL,
+    senderName VARCHAR(100) NOT NULL,
+    senderRole ENUM('Comprador', 'Vendedor', 'Administrador') NOT NULL,
+    message TEXT NOT NULL,
+    type ENUM('text', 'image') DEFAULT 'text',
+    imageUrl VARCHAR(500),
+    isRead BOOLEAN DEFAULT FALSE,
+    readAt TIMESTAMP NULL,
+    createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (chatId) REFERENCES chats(id) ON DELETE CASCADE,
+    FOREIGN KEY (senderId) REFERENCES users(id) ON DELETE CASCADE,
+    INDEX idx_chatId (chatId),
+    INDEX idx_createdAt (createdAt)
+)`);
+console.log('✅ Tabla messages verificada');
+
+await db.query(`CREATE TABLE IF NOT EXISTS review_replies (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    reviewId INT NOT NULL,
+    userId INT NOT NULL,
+    userName VARCHAR(100) NOT NULL,
+    comment TEXT NOT NULL,
+    createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (reviewId) REFERENCES reviews(id) ON DELETE CASCADE,
+    FOREIGN KEY (userId) REFERENCES users(id) ON DELETE CASCADE,
+    INDEX idx_reviewId (reviewId)
+)`);
+console.log('✅ Tabla review_replies verificada');
+
+await db.query(`CREATE TABLE IF NOT EXISTS review_likes (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    reviewId INT NOT NULL,
+    userId INT NOT NULL,
+    createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (reviewId) REFERENCES reviews(id) ON DELETE CASCADE,
+    FOREIGN KEY (userId) REFERENCES users(id) ON DELETE CASCADE,
+    UNIQUE KEY unique_like (reviewId, userId)
+)`);
+console.log('✅ Tabla review_likes verificada');
         console.log('✅ Tabla pending_profile_changes verificada');
 
         await db.query(`CREATE TABLE IF NOT EXISTS tracking_sessions (
@@ -249,6 +340,10 @@ const usersRouter = require('./routes/users')(db);
 const cartRouter = require('./routes/cart')(db);
 const salesRouter = require('./routes/sales')(db);
 const notificationsRouter = require('./routes/notifications')(db);
+const reviewsRouter = require('./routes/reviews')(db);
+// Agregar después de los otros routers
+const chatRouter = require('./routes/chat')(db);
+
 
 app.use('/api/auth', authRouter);
 app.use('/api/products', productsRouter);
@@ -258,6 +353,8 @@ app.use('/api/users', usersRouter);
 app.use('/api/cart', cartRouter);
 app.use('/api/sales', salesRouter);
 app.use('/api/notifications', notificationsRouter);
+app.use('/api/reviews', reviewsRouter);
+app.use('/api/chat', chatRouter);
 
 // Tracking
 const TrackingService = require('./services/trackingService');

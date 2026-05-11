@@ -11,9 +11,7 @@ module.exports = (db) => {
         
         const { items, total, paymentMethod, shippingAddress } = req.body;
 
-        // VALIDACIONES BASICAS
         if (!items || !Array.isArray(items) || items.length === 0) {
-            console.log('Error: Carrito vacio');
             return res.status(400).json({ 
                 success: false,
                 message: 'El carrito esta vacio'
@@ -21,7 +19,6 @@ module.exports = (db) => {
         }
 
         if (!total || total <= 0) {
-            console.log('Error: Total invalido');
             return res.status(400).json({ 
                 success: false,
                 message: 'Total invalido'
@@ -30,7 +27,6 @@ module.exports = (db) => {
 
         const validPaymentMethods = ['Efectivo', 'Tarjeta'];
         if (!paymentMethod || !validPaymentMethods.includes(paymentMethod)) {
-            console.log('Error: Metodo de pago invalido');
             return res.status(400).json({ 
                 success: false,
                 message: 'Metodo de pago invalido'
@@ -38,18 +34,8 @@ module.exports = (db) => {
         }
 
         try {
-            // VERIFICAR STOCK Y OBTENER INFO DE PRODUCTOS
-            for (let i = 0; i < items.length; i++) {
-                const item = items[i];
-                console.log('Verificando producto:', item.name);
-                
-                if (!item.productId || !item.name || !item.price || !item.quantity) {
-                    return res.status(400).json({ 
-                        success: false,
-                        message: 'Datos incompletos para el producto'
-                    });
-                }
-
+            // Verificar stock y obtener info
+            for (const item of items) {
                 const [products] = await db.query(
                     'SELECT id, stock, name, sellerId, sellerName, isAvailable, status FROM products WHERE id = ?',
                     [item.productId]
@@ -67,14 +53,14 @@ module.exports = (db) => {
                 if (product.status !== 'approved') {
                     return res.status(400).json({ 
                         success: false,
-                        message: 'Producto no esta aprobado: ' + product.name
+                        message: 'Producto no aprobado: ' + product.name
                     });
                 }
                 
                 if (product.isAvailable !== 1) {
                     return res.status(400).json({ 
                         success: false,
-                        message: 'Producto no esta disponible: ' + product.name
+                        message: 'Producto no disponible: ' + product.name
                     });
                 }
                 
@@ -85,28 +71,20 @@ module.exports = (db) => {
                     });
                 }
                 
-                // Guardar info del vendedor
                 item.sellerId = product.sellerId;
                 item.sellerName = product.sellerName;
+                item.productStock = product.stock;
             }
 
-            // OBTENER INFO DEL COMPRADOR
+            // Obtener comprador
             const [buyerInfo] = await db.query(
                 'SELECT nombreCompleto, numeroControl FROM users WHERE id = ?',
                 [req.userId]
             );
             
-            if (buyerInfo.length === 0) {
-                return res.status(404).json({ 
-                    success: false,
-                    message: 'Comprador no encontrado'
-                });
-            }
-            
             const buyer = buyerInfo[0];
-            console.log('Comprador:', buyer.nombreCompleto);
 
-            // CREAR EL PEDIDO
+            // Crear pedido
             const [orderResult] = await db.query(
                 `INSERT INTO orders (userId, total, paymentMethod, shippingAddress, status, createdAt, updatedAt)
                  VALUES (?, ?, ?, ?, 'pending', NOW(), NOW())`,
@@ -116,29 +94,28 @@ module.exports = (db) => {
             const orderId = orderResult.insertId;
             console.log('Pedido creado ID:', orderId);
 
-            // INSERTAR ITEMS DEL PEDIDO - SIN imageUrl para evitar error
+            // Insertar items
             for (const item of items) {
                 await db.query(
                     `INSERT INTO order_items (orderId, productId, productName, quantity, price, imageUrl)
                      VALUES (?, ?, ?, ?, ?, NULL)`,
                     [orderId, item.productId, item.name, item.quantity, item.price]
                 );
-                console.log('Item agregado:', item.quantity, 'x', item.name);
             }
 
-            // ACTUALIZAR STOCK
+            // Actualizar stock (disminuir)
             for (const item of items) {
                 await db.query(
-                    'UPDATE products SET stock = stock - ? WHERE id = ?',
+                    'UPDATE products SET stock = stock - ?, updatedAt = NOW() WHERE id = ?',
                     [item.quantity, item.productId]
                 );
+                console.log(`Stock actualizado: producto ${item.productId} -${item.quantity}`);
             }
 
-            // VACIAR CARRITO DEL COMPRADOR
+            // Vaciar carrito
             await db.query('DELETE FROM cart_items WHERE userId = ?', [req.userId]);
-            console.log('Carrito vaciado');
 
-            // NOTIFICAR A VENDEDORES
+            // Notificar vendedores
             const sellerMap = new Map();
             
             for (const item of items) {
@@ -160,41 +137,35 @@ module.exports = (db) => {
                 sellerData.totalAmount += item.price * item.quantity;
             }
             
-            // Notificar a cada vendedor
             for (const [sellerId, sellerData] of sellerMap) {
                 let itemsList = '';
                 for (const item of sellerData.items) {
-                    itemsList += item.quantity + 'x ' + item.name + ' - $' + item.subtotal.toFixed(2) + '\n';
+                    itemsList += `${item.quantity}x ${item.name} - $${item.subtotal.toFixed(2)}\n`;
                 }
                 
-                const notificationBody = 'NUEVO PEDIDO #' + orderId + '\n\n' +
-                    'Cliente: ' + buyer.nombreCompleto + '\n' +
-                    'Control: ' + buyer.numeroControl + '\n\n' +
-                    'Productos:\n' + itemsList + '\n' +
-                    'Total: $' + sellerData.totalAmount.toFixed(2) + '\n' +
-                    'Pago: ' + paymentMethod;
+                const notificationBody = `🆕 NUEVO PEDIDO #${orderId}\n\n` +
+                    `👤 Cliente: ${buyer.nombreCompleto}\n` +
+                    `🆔 Control: ${buyer.numeroControl}\n\n` +
+                    `📦 Productos:\n${itemsList}\n` +
+                    `💰 Total: $${sellerData.totalAmount.toFixed(2)}\n` +
+                    `💳 Pago: ${paymentMethod}`;
                 
                 await db.query(
                     `INSERT INTO notifications (userId, title, body, type, isRead, createdAt)
                      VALUES (?, ?, ?, 'order_update', FALSE, NOW())`,
-                    [sellerId, 'NUEVO PEDIDO #' + orderId, notificationBody]
+                    [sellerId, `🛒 NUEVO PEDIDO #${orderId}`, notificationBody]
                 );
-                
-                console.log('Notificacion enviada al vendedor:', sellerData.sellerName);
             }
 
-            // NOTIFICAR AL COMPRADOR
+            // Notificar comprador
             await db.query(
                 `INSERT INTO notifications (userId, title, body, type, isRead, createdAt)
                  VALUES (?, ?, ?, 'order_update', FALSE, NOW())`,
                 [req.userId,
-                 'Pedido #' + orderId + ' confirmado',
-                 'Tu pedido ha sido creado exitosamente.\nTotal: $' + total.toFixed(2) + '\nPago: ' + paymentMethod]
+                 `✅ Pedido #${orderId} confirmado`,
+                 `Tu pedido ha sido creado exitosamente.\nTotal: $${total.toFixed(2)}\nPago: ${paymentMethod}\nLos vendedores han sido notificados.`]
             );
 
-            console.log('Pedido completado exitosamente');
-            
-            // RESPUESTA EXITOSA
             res.status(201).json({ 
                 success: true,
                 id: orderId, 
@@ -230,52 +201,19 @@ module.exports = (db) => {
             
             res.json(orders);
         } catch (error) {
-            console.error('Error obteniendo pedidos:', error);
+            console.error('Error:', error);
             res.status(500).json({ message: 'Error al obtener pedidos' });
-        }
-    });
-
-    // GET /api/orders/:orderId - Obtener detalle
-    router.get('/:orderId', authenticateToken, async (req, res) => {
-        try {
-            const [orders] = await db.query(
-                'SELECT * FROM orders WHERE id = ? AND userId = ?',
-                [req.params.orderId, req.userId]
-            );
-            
-            if (orders.length === 0) {
-                return res.status(404).json({ message: 'Pedido no encontrado' });
-            }
-            
-            const [items] = await db.query(
-                'SELECT * FROM order_items WHERE orderId = ?',
-                [req.params.orderId]
-            );
-            
-            orders[0].items = items;
-            res.json(orders[0]);
-        } catch (error) {
-            console.error('Error obteniendo detalle:', error);
-            res.status(500).json({ message: 'Error al obtener detalle' });
         }
     });
 
     // GET /api/orders/seller/sales - Ventas del vendedor
     router.get('/seller/sales', authenticateToken, isSeller, async (req, res) => {
         try {
-            console.log('Obteniendo ventas para vendedor:', req.userId);
-            
             const [sales] = await db.query(
                 `SELECT DISTINCT 
-                    o.id, 
-                    o.userId, 
-                    o.total, 
-                    o.paymentMethod, 
-                    o.status, 
-                    o.createdAt,
+                    o.id, o.userId, o.total, o.paymentMethod, o.status, o.createdAt, o.updatedAt,
                     o.shippingAddress,
-                    u.nombreCompleto as buyerName, 
-                    u.numeroControl as buyerControl
+                    u.nombreCompleto as buyerName, u.numeroControl as buyerControl, u.telefono as buyerPhone
                  FROM orders o
                  JOIN order_items oi ON o.id = oi.orderId
                  JOIN products p ON oi.productId = p.id
@@ -285,7 +223,6 @@ module.exports = (db) => {
                 [req.userId]
             );
             
-            // Obtener items para cada orden
             for (const sale of sales) {
                 const [items] = await db.query(
                     `SELECT oi.* 
@@ -299,22 +236,26 @@ module.exports = (db) => {
             
             let totalSales = 0;
             for (const sale of sales) {
-                totalSales = totalSales + parseFloat(sale.total);
+                totalSales += parseFloat(sale.total);
             }
             
-            res.json({ 
-                sales: sales, 
-                totalSales: totalSales, 
-                totalOrders: sales.length 
-            });
+            const stats = {
+                pending: sales.filter(s => s.status === 'pending').length,
+                processing: sales.filter(s => s.status === 'processing').length,
+                shipped: sales.filter(s => s.status === 'shipped').length,
+                delivered: sales.filter(s => s.status === 'delivered').length,
+                cancelled: sales.filter(s => s.status === 'cancelled').length
+            };
+            
+            res.json({ sales, totalSales, totalOrders: sales.length, stats });
             
         } catch (error) {
-            console.error('Error obteniendo ventas:', error);
+            console.error('Error:', error);
             res.status(500).json({ message: 'Error al obtener ventas' });
         }
     });
 
-    // PATCH /api/orders/:orderId/status - Actualizar estado
+    // PATCH /api/orders/:orderId/status - Actualizar estado (MEJORADO)
     router.patch('/:orderId/status', authenticateToken, async (req, res) => {
         const { status } = req.body;
         const orderId = req.params.orderId;
@@ -325,19 +266,19 @@ module.exports = (db) => {
         }
 
         try {
-            // Verificar permisos
-            const [orderCheck] = await db.query(
-                `SELECT o.userId as buyerId, o.total, o.paymentMethod
+            // Obtener información del pedido
+            const [orderInfo] = await db.query(
+                `SELECT o.userId as buyerId, o.total, o.paymentMethod, o.status as currentStatus
                  FROM orders o
                  WHERE o.id = ?`,
                 [orderId]
             );
             
-            if (orderCheck.length === 0) {
+            if (orderInfo.length === 0) {
                 return res.status(404).json({ message: 'Pedido no encontrado' });
             }
             
-            // Verificar si el usuario es vendedor
+            // Verificar permisos
             const [sellerCheck] = await db.query(
                 `SELECT DISTINCT p.sellerId
                  FROM order_items oi
@@ -346,10 +287,35 @@ module.exports = (db) => {
                 [orderId, req.userId]
             );
             
-            const isAuthorized = req.userRole === 'Administrador' || sellerCheck.length > 0;
+            const isAuthorized = req.userRole === 'Administrador' || sellerCheck.length > 0 || orderInfo[0].buyerId === req.userId;
             
             if (!isAuthorized) {
                 return res.status(403).json({ message: 'No tienes permiso' });
+            }
+            
+            // Si es el comprador confirmando entrega
+            if (orderInfo[0].buyerId === req.userId && status === 'delivered') {
+                // Actualizar estadísticas del vendedor
+                const [sellerIds] = await db.query(
+                    `SELECT DISTINCT p.sellerId
+                     FROM order_items oi
+                     JOIN products p ON oi.productId = p.id
+                     WHERE oi.orderId = ?`,
+                    [orderId]
+                );
+                
+                for (const seller of sellerIds) {
+                    await db.query(
+                        'UPDATE users SET totalVentas = totalVentas + 1 WHERE id = ?',
+                        [seller.sellerId]
+                    );
+                }
+                
+                // Actualizar estadísticas del comprador
+                await db.query(
+                    'UPDATE users SET totalCompras = totalCompras + 1 WHERE id = ?',
+                    [orderInfo[0].buyerId]
+                );
             }
             
             await db.query(
@@ -357,31 +323,80 @@ module.exports = (db) => {
                 [status, orderId]
             );
             
-            // Notificar al comprador
-            let statusTitle = '';
-            let statusBody = '';
+            // Mensajes según el estado y quién lo actualizó
+            const isBuyerAction = orderInfo[0].buyerId === req.userId;
+            
+            let buyerTitle = '';
+            let buyerBody = '';
+            let sellerTitle = '';
+            let sellerBody = '';
             
             if (status === 'processing') {
-                statusTitle = 'Pedido en proceso';
-                statusBody = 'Tu pedido #' + orderId + ' esta siendo preparado.';
+                buyerTitle = '🔄 Pedido en proceso';
+                buyerBody = `Tu pedido #${orderId} esta siendo preparado por el vendedor.`;
+                sellerTitle = '✅ Pedido marcado como en proceso';
+                sellerBody = `Has marcado el pedido #${orderId} como "En proceso".`;
             } else if (status === 'shipped') {
-                statusTitle = 'Pedido enviado';
-                statusBody = 'Tu pedido #' + orderId + ' ha sido enviado.';
+                buyerTitle = '📦 Pedido enviado';
+                buyerBody = `¡Buenas noticias! Tu pedido #${orderId} ha sido enviado. Pronto lo recibiras.`;
+                sellerTitle = '✅ Pedido marcado como enviado';
+                sellerBody = `Has marcado el pedido #${orderId} como "Enviado".`;
             } else if (status === 'delivered') {
-                statusTitle = 'Pedido entregado';
-                statusBody = 'Tu pedido #' + orderId + ' ha sido entregado.';
+                if (isBuyerAction) {
+                    buyerTitle = '✅ Pedido recibido';
+                    buyerBody = `Has confirmado la recepción del pedido #${orderId}. ¡Gracias por comprar en ByteSnack!`;
+                    sellerTitle = '🎉 Pedido entregado';
+                    sellerBody = `El comprador ha confirmado la recepción del pedido #${orderId}. ¡Venta completada!`;
+                } else {
+                    buyerTitle = '✅ Pedido entregado';
+                    buyerBody = `Tu pedido #${orderId} ha sido marcado como entregado. ¡Disfruta tus productos!`;
+                    sellerTitle = '✅ Pedido entregado';
+                    sellerBody = `Has marcado el pedido #${orderId} como "Entregado".`;
+                }
             } else if (status === 'cancelled') {
-                statusTitle = 'Pedido cancelado';
-                statusBody = 'Tu pedido #' + orderId + ' ha sido cancelado.';
+                // Restaurar stock si se cancela
+                const [items] = await db.query(
+                    'SELECT productId, quantity FROM order_items WHERE orderId = ?',
+                    [orderId]
+                );
+                for (const item of items) {
+                    await db.query(
+                        'UPDATE products SET stock = stock + ? WHERE id = ?',
+                        [item.quantity, item.productId]
+                    );
+                }
+                
+                buyerTitle = '❌ Pedido cancelado';
+                buyerBody = `Tu pedido #${orderId} ha sido cancelado. El stock ha sido restaurado.`;
+                sellerTitle = '❌ Pedido cancelado';
+                sellerBody = `Has cancelado el pedido #${orderId}. El stock ha sido restaurado.`;
             }
             
-            if (statusTitle !== '') {
+            // Notificar al comprador
+            if (buyerTitle !== '') {
                 await db.query(
                     `INSERT INTO notifications (userId, title, body, type, isRead, createdAt)
                      VALUES (?, ?, ?, 'order_update', FALSE, NOW())`,
-                    [orderCheck[0].buyerId, statusTitle, statusBody]
+                    [orderInfo[0].buyerId, buyerTitle, buyerBody]
                 );
-                console.log('Notificacion enviada al comprador:', statusTitle);
+            }
+            
+            // Notificar al vendedor (si no es el comprador)
+            if (!isBuyerAction && sellerTitle !== '') {
+                const [sellerIds] = await db.query(
+                    `SELECT DISTINCT p.sellerId
+                     FROM order_items oi
+                     JOIN products p ON oi.productId = p.id
+                     WHERE oi.orderId = ?`,
+                    [orderId]
+                );
+                for (const seller of sellerIds) {
+                    await db.query(
+                        `INSERT INTO notifications (userId, title, body, type, isRead, createdAt)
+                         VALUES (?, ?, ?, 'order_update', FALSE, NOW())`,
+                        [seller.sellerId, sellerTitle, sellerBody]
+                    );
+                }
             }
             
             res.json({ success: true, message: 'Estado actualizado correctamente' });
@@ -389,6 +404,25 @@ module.exports = (db) => {
         } catch (error) {
             console.error('Error actualizando estado:', error);
             res.status(500).json({ message: 'Error al actualizar estado' });
+        }
+    });
+
+    // GET /api/orders/:orderId/timeline - Obtener línea de tiempo del pedido
+    router.get('/:orderId/timeline', authenticateToken, async (req, res) => {
+        const { orderId } = req.params;
+        
+        try {
+            const [timeline] = await db.query(
+                `SELECT status, createdAt, updatedAt
+                 FROM orders
+                 WHERE id = ?`,
+                [orderId]
+            );
+            
+            res.json(timeline[0] || {});
+        } catch (error) {
+            console.error('Error:', error);
+            res.status(500).json({ message: 'Error al obtener timeline' });
         }
     });
 
