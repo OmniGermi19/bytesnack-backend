@@ -60,15 +60,48 @@ pool.getConnection((err, connection) => {
     }
 });
 
+async function addColumnIfNotExists(tableName, columnName, columnDefinition) {
+    try {
+        const [exists] = await db.query(`
+            SELECT COUNT(*) as count FROM information_schema.COLUMNS 
+            WHERE TABLE_SCHEMA = DATABASE() 
+            AND TABLE_NAME = ? 
+            AND COLUMN_NAME = ?
+        `, [tableName, columnName]);
+        
+        if (exists[0].count === 0) {
+            await db.query(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnDefinition}`);
+            console.log(`✅ Columna ${columnName} agregada a ${tableName}`);
+            return true;
+        }
+        return false;
+    } catch (error) {
+        console.log(`ℹ️ Columna ${columnName} ya existe o no se pudo verificar`);
+        return false;
+    }
+}
+
 async function inicializarBaseDatos() {
     try {
+        // ============ AGREGAR COLUMNAS FALTANTES A TABLAS EXISTENTES ============
+        
+        // Columnas de confirmación para orders
+        await addColumnIfNotExists('orders', 'sellerConfirmed', 'BOOLEAN DEFAULT FALSE');
+        await addColumnIfNotExists('orders', 'buyerConfirmed', 'BOOLEAN DEFAULT FALSE');
+        await addColumnIfNotExists('orders', 'sellerConfirmedAt', 'TIMESTAMP NULL');
+        await addColumnIfNotExists('orders', 'buyerConfirmedAt', 'TIMESTAMP NULL');
+        
+        // Agregar columna address a tracking_sessions si no existe
+        await addColumnIfNotExists('tracking_sessions', 'lastAddress', 'TEXT NULL');
+        await addColumnIfNotExists('tracking_sessions', 'lastSpeed', 'DECIMAL(10,2) NULL');
+        await addColumnIfNotExists('tracking_sessions', 'lastAccuracy', 'DECIMAL(10,2) NULL');
+        await addColumnIfNotExists('tracking_sessions', 'sellerName', 'VARCHAR(100) NULL');
+        
+        // Agregar columna isOnline a users si no existe
+        await addColumnIfNotExists('users', 'isOnline', 'BOOLEAN DEFAULT FALSE');
+        await addColumnIfNotExists('users', 'lastSeen', 'TIMESTAMP NULL');
 
-        // Agregar columnas de confirmación a orders
-        await db.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS sellerConfirmed BOOLEAN DEFAULT FALSE`);
-        await db.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS buyerReceived BOOLEAN DEFAULT FALSE`);
-        await db.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS sellerConfirmedAt TIMESTAMP NULL`);
-        await db.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS buyerReceivedAt TIMESTAMP NULL`);
-        console.log('✅ Columnas de confirmación agregadas a orders');
+        // ============ CREAR TABLAS SI NO EXISTEN ============
 
         await db.query(`CREATE TABLE IF NOT EXISTS users (
             id INT PRIMARY KEY AUTO_INCREMENT,
@@ -96,6 +129,8 @@ async function inicializarBaseDatos() {
             isBanned BOOLEAN DEFAULT FALSE,
             banReason TEXT,
             bannedAt TIMESTAMP NULL,
+            isOnline BOOLEAN DEFAULT FALSE,
+            lastSeen TIMESTAMP NULL,
             INDEX idx_numeroControl (numeroControl),
             INDEX idx_role (role),
             INDEX idx_isActive (isActive)
@@ -147,6 +182,10 @@ async function inicializarBaseDatos() {
             paymentMethod VARCHAR(50) DEFAULT 'Efectivo',
             shippingAddress TEXT,
             status ENUM('pending', 'processing', 'shipped', 'delivered', 'cancelled') DEFAULT 'pending',
+            sellerConfirmed BOOLEAN DEFAULT FALSE,
+            buyerConfirmed BOOLEAN DEFAULT FALSE,
+            sellerConfirmedAt TIMESTAMP NULL,
+            buyerConfirmedAt TIMESTAMP NULL,
             createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
             FOREIGN KEY (userId) REFERENCES users(id) ON DELETE CASCADE,
@@ -295,6 +334,7 @@ async function inicializarBaseDatos() {
             id INT PRIMARY KEY AUTO_INCREMENT,
             orderId INT UNIQUE NOT NULL,
             sellerId INT NULL,
+            sellerName VARCHAR(100) NULL,
             status ENUM('pending', 'active', 'ended') DEFAULT 'pending',
             startedAt TIMESTAMP NULL,
             endedAt TIMESTAMP NULL,
@@ -367,6 +407,7 @@ async function inicializarBaseDatos() {
         )`);
         console.log('✅ Tabla product_reports verificada');
 
+        // ============ CREAR ADMINISTRADOR POR DEFECTO ============
         const [admins] = await db.query('SELECT id FROM users WHERE role = "Administrador" LIMIT 1');
         if (admins.length === 0) {
             const bcrypt = require('bcryptjs');
@@ -425,6 +466,7 @@ const trackingService = new TrackingService(server);
 const trackingRoutes = trackingRouter(db, trackingService);
 app.use('/api/tracking', trackingRoutes);
 
+// Manejador de rutas no encontradas
 app.use('*', (req, res) => {
     res.status(404).json({
         error: 'Ruta no encontrada',
@@ -432,6 +474,7 @@ app.use('*', (req, res) => {
     });
 });
 
+// ============ INICIAR SERVIDOR ============
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
     console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
