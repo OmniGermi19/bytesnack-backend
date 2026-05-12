@@ -86,8 +86,8 @@ module.exports = (db) => {
 
             // Crear pedido
             const [orderResult] = await db.query(
-                `INSERT INTO orders (userId, total, paymentMethod, shippingAddress, status, createdAt, updatedAt)
-                 VALUES (?, ?, ?, ?, 'pending', NOW(), NOW())`,
+                `INSERT INTO orders (userId, total, paymentMethod, shippingAddress, status, createdAt, updatedAt, sellerConfirmed, buyerReceived)
+                 VALUES (?, ?, ?, ?, 'pending', NOW(), NOW(), FALSE, FALSE)`,
                 [req.userId, total, paymentMethod, shippingAddress || 'Entrega en ITESCO']
             );
 
@@ -143,17 +143,17 @@ module.exports = (db) => {
                     itemsList += `${item.quantity}x ${item.name} - $${item.subtotal.toFixed(2)}\n`;
                 }
                 
-                const notificationBody = `🆕 NUEVO PEDIDO #${orderId}\n\n` +
-                    `👤 Cliente: ${buyer.nombreCompleto}\n` +
-                    `🆔 Control: ${buyer.numeroControl}\n\n` +
-                    `📦 Productos:\n${itemsList}\n` +
-                    `💰 Total: $${sellerData.totalAmount.toFixed(2)}\n` +
-                    `💳 Pago: ${paymentMethod}`;
+                const notificationBody = `NUEVO PEDIDO #${orderId}\n\n` +
+                    `Cliente: ${buyer.nombreCompleto}\n` +
+                    `Control: ${buyer.numeroControl}\n\n` +
+                    `Productos:\n${itemsList}\n` +
+                    `Total: $${sellerData.totalAmount.toFixed(2)}\n` +
+                    `Pago: ${paymentMethod}`;
                 
                 await db.query(
                     `INSERT INTO notifications (userId, title, body, type, isRead, createdAt)
                      VALUES (?, ?, ?, 'order_update', FALSE, NOW())`,
-                    [sellerId, `🛒 NUEVO PEDIDO #${orderId}`, notificationBody]
+                    [sellerId, `NUEVO PEDIDO #${orderId}`, notificationBody]
                 );
             }
 
@@ -162,7 +162,7 @@ module.exports = (db) => {
                 `INSERT INTO notifications (userId, title, body, type, isRead, createdAt)
                  VALUES (?, ?, ?, 'order_update', FALSE, NOW())`,
                 [req.userId,
-                 `✅ Pedido #${orderId} confirmado`,
+                 `Pedido #${orderId} confirmado`,
                  `Tu pedido ha sido creado exitosamente.\nTotal: $${total.toFixed(2)}\nPago: ${paymentMethod}\nLos vendedores han sido notificados.`]
             );
 
@@ -213,7 +213,8 @@ module.exports = (db) => {
                 `SELECT DISTINCT 
                     o.id, o.userId, o.total, o.paymentMethod, o.status, o.createdAt, o.updatedAt,
                     o.shippingAddress,
-                    u.nombreCompleto as buyerName, u.numeroControl as buyerControl, u.telefono as buyerPhone
+                    u.nombreCompleto as buyerName, u.numeroControl as buyerControl, u.telefono as buyerPhone,
+                    o.sellerConfirmed, o.buyerReceived, o.sellerConfirmedAt, o.buyerReceivedAt
                  FROM orders o
                  JOIN order_items oi ON o.id = oi.orderId
                  JOIN products p ON oi.productId = p.id
@@ -255,7 +256,7 @@ module.exports = (db) => {
         }
     });
 
-    // PATCH /api/orders/:orderId/status - Actualizar estado (MEJORADO)
+    // PATCH /api/orders/:orderId/status - Actualizar estado
     router.patch('/:orderId/status', authenticateToken, async (req, res) => {
         const { status } = req.body;
         const orderId = req.params.orderId;
@@ -266,7 +267,6 @@ module.exports = (db) => {
         }
 
         try {
-            // Obtener información del pedido
             const [orderInfo] = await db.query(
                 `SELECT o.userId as buyerId, o.total, o.paymentMethod, o.status as currentStatus
                  FROM orders o
@@ -278,7 +278,6 @@ module.exports = (db) => {
                 return res.status(404).json({ message: 'Pedido no encontrado' });
             }
             
-            // Verificar permisos
             const [sellerCheck] = await db.query(
                 `SELECT DISTINCT p.sellerId
                  FROM order_items oi
@@ -295,7 +294,6 @@ module.exports = (db) => {
             
             // Si es el comprador confirmando entrega
             if (orderInfo[0].buyerId === req.userId && status === 'delivered') {
-                // Actualizar estadísticas del vendedor
                 const [sellerIds] = await db.query(
                     `SELECT DISTINCT p.sellerId
                      FROM order_items oi
@@ -311,7 +309,6 @@ module.exports = (db) => {
                     );
                 }
                 
-                // Actualizar estadísticas del comprador
                 await db.query(
                     'UPDATE users SET totalCompras = totalCompras + 1 WHERE id = ?',
                     [orderInfo[0].buyerId]
@@ -323,7 +320,6 @@ module.exports = (db) => {
                 [status, orderId]
             );
             
-            // Mensajes según el estado y quién lo actualizó
             const isBuyerAction = orderInfo[0].buyerId === req.userId;
             
             let buyerTitle = '';
@@ -332,29 +328,28 @@ module.exports = (db) => {
             let sellerBody = '';
             
             if (status === 'processing') {
-                buyerTitle = '🔄 Pedido en proceso';
+                buyerTitle = 'Pedido en proceso';
                 buyerBody = `Tu pedido #${orderId} esta siendo preparado por el vendedor.`;
-                sellerTitle = '✅ Pedido marcado como en proceso';
+                sellerTitle = 'Pedido marcado como en proceso';
                 sellerBody = `Has marcado el pedido #${orderId} como "En proceso".`;
             } else if (status === 'shipped') {
-                buyerTitle = '📦 Pedido enviado';
+                buyerTitle = 'Pedido enviado';
                 buyerBody = `¡Buenas noticias! Tu pedido #${orderId} ha sido enviado. Pronto lo recibiras.`;
-                sellerTitle = '✅ Pedido marcado como enviado';
+                sellerTitle = 'Pedido marcado como enviado';
                 sellerBody = `Has marcado el pedido #${orderId} como "Enviado".`;
             } else if (status === 'delivered') {
                 if (isBuyerAction) {
-                    buyerTitle = '✅ Pedido recibido';
-                    buyerBody = `Has confirmado la recepción del pedido #${orderId}. ¡Gracias por comprar en ByteSnack!`;
-                    sellerTitle = '🎉 Pedido entregado';
+                    buyerTitle = 'Pedido recibido';
+                    buyerBody = `Has confirmado la recepción del pedido #${orderId}. ¡Gracias por comprar!`;
+                    sellerTitle = 'Pedido entregado';
                     sellerBody = `El comprador ha confirmado la recepción del pedido #${orderId}. ¡Venta completada!`;
                 } else {
-                    buyerTitle = '✅ Pedido entregado';
+                    buyerTitle = 'Pedido entregado';
                     buyerBody = `Tu pedido #${orderId} ha sido marcado como entregado. ¡Disfruta tus productos!`;
-                    sellerTitle = '✅ Pedido entregado';
+                    sellerTitle = 'Pedido entregado';
                     sellerBody = `Has marcado el pedido #${orderId} como "Entregado".`;
                 }
             } else if (status === 'cancelled') {
-                // Restaurar stock si se cancela
                 const [items] = await db.query(
                     'SELECT productId, quantity FROM order_items WHERE orderId = ?',
                     [orderId]
@@ -366,13 +361,12 @@ module.exports = (db) => {
                     );
                 }
                 
-                buyerTitle = '❌ Pedido cancelado';
+                buyerTitle = 'Pedido cancelado';
                 buyerBody = `Tu pedido #${orderId} ha sido cancelado. El stock ha sido restaurado.`;
-                sellerTitle = '❌ Pedido cancelado';
+                sellerTitle = 'Pedido cancelado';
                 sellerBody = `Has cancelado el pedido #${orderId}. El stock ha sido restaurado.`;
             }
             
-            // Notificar al comprador
             if (buyerTitle !== '') {
                 await db.query(
                     `INSERT INTO notifications (userId, title, body, type, isRead, createdAt)
@@ -381,7 +375,6 @@ module.exports = (db) => {
                 );
             }
             
-            // Notificar al vendedor (si no es el comprador)
             if (!isBuyerAction && sellerTitle !== '') {
                 const [sellerIds] = await db.query(
                     `SELECT DISTINCT p.sellerId
@@ -407,22 +400,83 @@ module.exports = (db) => {
         }
     });
 
-    // GET /api/orders/:orderId/timeline - Obtener línea de tiempo del pedido
-    router.get('/:orderId/timeline', authenticateToken, async (req, res) => {
+    // ========== CONFIRMACIONES DE ENTREGA ==========
+
+    // Vendedor confirma que entregó el pedido
+    router.post('/:orderId/confirm-seller', authenticateToken, async (req, res) => {
         const { orderId } = req.params;
         
         try {
-            const [timeline] = await db.query(
-                `SELECT status, createdAt, updatedAt
-                 FROM orders
+            const [sellerCheck] = await db.query(
+                `SELECT DISTINCT p.sellerId, o.userId as buyerId
+                 FROM orders o
+                 JOIN order_items oi ON o.id = oi.orderId
+                 JOIN products p ON oi.productId = p.id
+                 WHERE o.id = ? AND p.sellerId = ?`,
+                [orderId, req.userId]
+            );
+            
+            if (sellerCheck.length === 0 && req.userRole !== 'Administrador') {
+                return res.status(403).json({ message: 'No tienes permiso' });
+            }
+            
+            await db.query(
+                `UPDATE orders 
+                 SET sellerConfirmed = TRUE, sellerConfirmedAt = NOW(), updatedAt = NOW() 
                  WHERE id = ?`,
                 [orderId]
             );
             
-            res.json(timeline[0] || {});
+            const [order] = await db.query(`SELECT buyerReceived FROM orders WHERE id = ?`, [orderId]);
+            
+            if (order[0]?.buyerReceived === 1) {
+                await db.query(
+                    `UPDATE orders SET status = 'delivered', updatedAt = NOW() WHERE id = ?`,
+                    [orderId]
+                );
+            }
+            
+            res.json({ success: true, message: 'Entrega confirmada' });
         } catch (error) {
-            console.error('Error:', error);
-            res.status(500).json({ message: 'Error al obtener timeline' });
+            console.error('Error confirmando entrega:', error);
+            res.status(500).json({ message: 'Error al confirmar entrega' });
+        }
+    });
+
+    // Comprador confirma que recibió el pedido
+    router.post('/:orderId/confirm-buyer', authenticateToken, async (req, res) => {
+        const { orderId } = req.params;
+        
+        try {
+            const [orderCheck] = await db.query(
+                `SELECT userId FROM orders WHERE id = ? AND userId = ?`,
+                [orderId, req.userId]
+            );
+            
+            if (orderCheck.length === 0 && req.userRole !== 'Administrador') {
+                return res.status(403).json({ message: 'No tienes permiso' });
+            }
+            
+            await db.query(
+                `UPDATE orders 
+                 SET buyerReceived = TRUE, buyerReceivedAt = NOW(), updatedAt = NOW() 
+                 WHERE id = ?`,
+                [orderId]
+            );
+            
+            const [order] = await db.query(`SELECT sellerConfirmed FROM orders WHERE id = ?`, [orderId]);
+            
+            if (order[0]?.sellerConfirmed === 1) {
+                await db.query(
+                    `UPDATE orders SET status = 'delivered', updatedAt = NOW() WHERE id = ?`,
+                    [orderId]
+                );
+            }
+            
+            res.json({ success: true, message: 'Recepción confirmada' });
+        } catch (error) {
+            console.error('Error confirmando recepción:', error);
+            res.status(500).json({ message: 'Error al confirmar recepción' });
         }
     });
 

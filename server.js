@@ -62,6 +62,14 @@ pool.getConnection((err, connection) => {
 
 async function inicializarBaseDatos() {
     try {
+
+        // Agregar columnas de confirmación a orders
+        await db.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS sellerConfirmed BOOLEAN DEFAULT FALSE`);
+        await db.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS buyerReceived BOOLEAN DEFAULT FALSE`);
+        await db.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS sellerConfirmedAt TIMESTAMP NULL`);
+        await db.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS buyerReceivedAt TIMESTAMP NULL`);
+        console.log('✅ Columnas de confirmación agregadas a orders');
+
         await db.query(`CREATE TABLE IF NOT EXISTS users (
             id INT PRIMARY KEY AUTO_INCREMENT,
             role ENUM('Comprador', 'Vendedor', 'Administrador') NOT NULL DEFAULT 'Comprador',
@@ -418,9 +426,9 @@ const trackingRoutes = trackingRouter(db, trackingService);
 app.use('/api/tracking', trackingRoutes);
 
 app.use('*', (req, res) => {
-    res.status(404).json({ 
-        error: 'Ruta no encontrada', 
-        message: `La ruta ${req.originalUrl} no existe` 
+    res.status(404).json({
+        error: 'Ruta no encontrada',
+        message: `La ruta ${req.originalUrl} no existe`
     });
 });
 
