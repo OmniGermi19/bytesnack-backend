@@ -6,8 +6,8 @@ module.exports = (db) => {
 
     // POST /api/orders - Crear pedido
     router.post('/', authenticateToken, isBuyer, async (req, res) => {
-        console.log('=== NUEVO PEDIDO ===');
-        console.log('Usuario:', req.userId);
+        console.log('📦 [Orders] === NUEVO PEDIDO ===');
+        console.log(`📦 [Orders] Usuario: ${req.userId}`);
         
         const { items, total, paymentMethod, shippingAddress } = req.body;
 
@@ -67,7 +67,7 @@ module.exports = (db) => {
                 if (product.stock < item.quantity) {
                     return res.status(400).json({ 
                         success: false,
-                        message: 'Stock insuficiente para: ' + product.name + '. Disponible: ' + product.stock
+                        message: `Stock insuficiente para: ${product.name}. Disponible: ${product.stock}`
                     });
                 }
                 
@@ -92,7 +92,7 @@ module.exports = (db) => {
             );
 
             const orderId = orderResult.insertId;
-            console.log('Pedido creado ID:', orderId);
+            console.log(`✅ [Orders] Pedido creado ID: ${orderId}`);
 
             // Insertar items
             for (const item of items) {
@@ -109,7 +109,7 @@ module.exports = (db) => {
                     'UPDATE products SET stock = stock - ?, updatedAt = NOW() WHERE id = ?',
                     [item.quantity, item.productId]
                 );
-                console.log(`Stock actualizado: producto ${item.productId} -${item.quantity}`);
+                console.log(`📦 [Orders] Stock actualizado: producto ${item.productId} -${item.quantity}`);
             }
 
             // Vaciar carrito
@@ -153,8 +153,9 @@ module.exports = (db) => {
                 await db.query(
                     `INSERT INTO notifications (userId, title, body, type, isRead, createdAt)
                      VALUES (?, ?, ?, 'order_update', FALSE, NOW())`,
-                    [sellerId, `NUEVO PEDIDO #${orderId}`, notificationBody]
+                    [sellerId, `🆕 NUEVO PEDIDO #${orderId}`, notificationBody]
                 );
+                console.log(`📢 [Orders] Notificado vendedor ${sellerId}`);
             }
 
             // Notificar comprador
@@ -162,10 +163,11 @@ module.exports = (db) => {
                 `INSERT INTO notifications (userId, title, body, type, isRead, createdAt)
                  VALUES (?, ?, ?, 'order_update', FALSE, NOW())`,
                 [req.userId,
-                 `Pedido #${orderId} confirmado`,
+                 `✅ Pedido #${orderId} confirmado`,
                  `Tu pedido ha sido creado exitosamente.\nTotal: $${total.toFixed(2)}\nPago: ${paymentMethod}\nLos vendedores han sido notificados.`]
             );
 
+            console.log(`✅ [Orders] Pedido ${orderId} completado exitosamente`);
             res.status(201).json({ 
                 success: true,
                 id: orderId, 
@@ -175,7 +177,7 @@ module.exports = (db) => {
             });
 
         } catch (error) {
-            console.error('Error creando pedido:', error);
+            console.error('❌ Error creando pedido:', error);
             res.status(500).json({ 
                 success: false,
                 message: 'Error al crear pedido: ' + error.message 
@@ -186,6 +188,8 @@ module.exports = (db) => {
     // GET /api/orders - Obtener pedidos del usuario
     router.get('/', authenticateToken, async (req, res) => {
         try {
+            console.log(`📦 [Orders] Obteniendo pedidos de usuario ${req.userId}`);
+            
             const [orders] = await db.query(
                 'SELECT * FROM orders WHERE userId = ? ORDER BY createdAt DESC',
                 [req.userId]
@@ -199,9 +203,10 @@ module.exports = (db) => {
                 order.items = items;
             }
             
+            console.log(`✅ [Orders] ${orders.length} pedidos encontrados`);
             res.json(orders);
         } catch (error) {
-            console.error('Error:', error);
+            console.error('❌ Error:', error);
             res.status(500).json({ message: 'Error al obtener pedidos' });
         }
     });
@@ -209,6 +214,8 @@ module.exports = (db) => {
     // GET /api/orders/seller/sales - Ventas del vendedor
     router.get('/seller/sales', authenticateToken, isSeller, async (req, res) => {
         try {
+            console.log(`📦 [Orders] Obteniendo ventas de vendedor ${req.userId}`);
+            
             const [sales] = await db.query(
                 `SELECT DISTINCT 
                     o.id, o.userId, o.total, o.paymentMethod, o.status, o.createdAt, o.updatedAt,
@@ -248,10 +255,11 @@ module.exports = (db) => {
                 cancelled: sales.filter(s => s.status === 'cancelled').length
             };
             
+            console.log(`✅ [Orders] ${sales.length} ventas encontradas, total: $${totalSales.toFixed(2)}`);
             res.json({ sales, totalSales, totalOrders: sales.length, stats });
             
         } catch (error) {
-            console.error('Error:', error);
+            console.error('❌ Error:', error);
             res.status(500).json({ message: 'Error al obtener ventas' });
         }
     });
@@ -260,8 +268,9 @@ module.exports = (db) => {
     router.get('/:orderId', authenticateToken, async (req, res) => {
         const { orderId } = req.params;
         
+        console.log(`📦 [Orders] Obteniendo detalle del pedido ${orderId} para usuario ${req.userId}`);
+        
         try {
-            // Obtener información básica del pedido
             const [orders] = await db.query(
                 `SELECT o.*, u.nombreCompleto as buyerName, u.numeroControl as buyerControl, u.telefono as buyerPhone, u.email as buyerEmail
                  FROM orders o
@@ -276,7 +285,6 @@ module.exports = (db) => {
             
             const order = orders[0];
             
-            // Verificar permiso: administrador, comprador, o vendedor del producto
             const [sellerCheck] = await db.query(
                 `SELECT DISTINCT p.sellerId
                  FROM order_items oi
@@ -293,7 +301,6 @@ module.exports = (db) => {
                 return res.status(403).json({ message: 'No tienes permiso para ver este pedido' });
             }
             
-            // Obtener items del pedido
             const [items] = await db.query(
                 `SELECT oi.*, p.images as productImages
                  FROM order_items oi
@@ -302,7 +309,6 @@ module.exports = (db) => {
                 [orderId]
             );
             
-            // Procesar items (parsear imágenes si es necesario)
             const processedItems = items.map(item => ({
                 ...item,
                 price: parseFloat(item.price),
@@ -312,7 +318,6 @@ module.exports = (db) => {
             order.items = processedItems;
             order.total = parseFloat(order.total);
             
-            // Agregar información de tracking si existe
             const [tracking] = await db.query(
                 `SELECT ts.status as trackingStatus, ts.startedAt, ts.lastLat, ts.lastLng, ts.lastAddress,
                         ts.lastSpeed, ts.lastAccuracy, ts.lastLocationUpdate
@@ -353,6 +358,8 @@ module.exports = (db) => {
         const orderId = req.params.orderId;
         const validStatuses = ['pending', 'processing', 'shipped', 'delivered', 'cancelled'];
         
+        console.log(`📦 [Orders] Actualizando estado del pedido ${orderId} a ${status} por usuario ${req.userId}`);
+        
         if (!validStatuses.includes(status)) {
             return res.status(400).json({ message: 'Estado invalido' });
         }
@@ -383,7 +390,6 @@ module.exports = (db) => {
                 return res.status(403).json({ message: 'No tienes permiso' });
             }
             
-            // Si es el comprador confirmando entrega
             if (orderInfo[0].buyerId === req.userId && status === 'delivered') {
                 const [sellerIds] = await db.query(
                     `SELECT DISTINCT p.sellerId
@@ -483,19 +489,21 @@ module.exports = (db) => {
                 }
             }
             
+            console.log(`✅ [Orders] Estado del pedido ${orderId} actualizado a ${status}`);
             res.json({ success: true, message: 'Estado actualizado correctamente' });
             
         } catch (error) {
-            console.error('Error actualizando estado:', error);
+            console.error('❌ Error actualizando estado:', error);
             res.status(500).json({ message: 'Error al actualizar estado' });
         }
     });
 
-    // ========== CONFIRMACIONES DE ENTREGA CORREGIDAS ==========
+    // ========== CONFIRMACIONES DE ENTREGA ==========
 
-    // Vendedor confirma que entregó el pedido (CORREGIDO)
     router.post('/:orderId/confirm-seller', authenticateToken, async (req, res) => {
         const { orderId } = req.params;
+        
+        console.log(`📦 [Orders] Vendedor ${req.userId} confirma entrega del pedido ${orderId}`);
         
         try {
             const [sellerCheck] = await db.query(
@@ -523,14 +531,12 @@ module.exports = (db) => {
                 [orderId]
             );
             
-            // ✅ CORREGIDO: Actualizar estado a 'delivered' si ambas confirmaciones están hechas
             if (order[0]?.buyerReceived === 1 && order[0]?.status !== 'delivered') {
                 await db.query(
                     `UPDATE orders SET status = 'delivered', updatedAt = NOW() WHERE id = ?`,
                     [orderId]
                 );
                 
-                // Notificar al comprador que el pedido está completado
                 await db.query(
                     `INSERT INTO notifications (userId, title, body, type, isRead, createdAt)
                      VALUES (?, ?, ?, 'order_update', FALSE, NOW())`,
@@ -540,7 +546,6 @@ module.exports = (db) => {
                 );
             }
             
-            // Notificar al comprador que el vendedor confirmó la entrega
             await db.query(
                 `INSERT INTO notifications (userId, title, body, type, isRead, createdAt)
                  VALUES (?, ?, ?, 'order_update', FALSE, NOW())`,
@@ -549,16 +554,18 @@ module.exports = (db) => {
                  `El vendedor ha confirmado que entregó tu pedido #${orderId}. Confirma la recepción para completar la compra.`]
             );
             
+            console.log(`✅ [Orders] Entrega confirmada por vendedor para pedido ${orderId}`);
             res.json({ success: true, message: 'Entrega confirmada por vendedor' });
         } catch (error) {
-            console.error('Error confirmando entrega:', error);
+            console.error('❌ Error confirmando entrega:', error);
             res.status(500).json({ message: 'Error al confirmar entrega' });
         }
     });
 
-    // Comprador confirma que recibió el pedido (CORREGIDO)
     router.post('/:orderId/confirm-buyer', authenticateToken, async (req, res) => {
         const { orderId } = req.params;
+        
+        console.log(`📦 [Orders] Comprador ${req.userId} confirma recepción del pedido ${orderId}`);
         
         try {
             const [orderCheck] = await db.query(
@@ -582,7 +589,6 @@ module.exports = (db) => {
                 [orderId]
             );
             
-            // ✅ CORREGIDO: Actualizar estado a 'delivered' si ambas confirmaciones están hechas
             if (order[0]?.sellerConfirmed === 1 && order[0]?.status !== 'delivered') {
                 await db.query(
                     `UPDATE orders SET status = 'delivered', updatedAt = NOW() WHERE id = ?`,
@@ -590,7 +596,6 @@ module.exports = (db) => {
                 );
             }
             
-            // Notificar a los vendedores que el comprador confirmó la recepción
             const [sellerIds] = await db.query(
                 `SELECT DISTINCT p.sellerId
                  FROM order_items oi
@@ -609,9 +614,10 @@ module.exports = (db) => {
                 );
             }
             
+            console.log(`✅ [Orders] Recepción confirmada por comprador para pedido ${orderId}`);
             res.json({ success: true, message: 'Recepción confirmada por comprador' });
         } catch (error) {
-            console.error('Error confirmando recepción:', error);
+            console.error('❌ Error confirmando recepción:', error);
             res.status(500).json({ message: 'Error al confirmar recepción' });
         }
     });

@@ -23,7 +23,7 @@ module.exports = (db) => {
                 totalRevenue: parseFloat(totalRevenue?.total || 0)
             });
         } catch (error) {
-            console.error('Error obteniendo stats:', error);
+            console.error('❌ Error obteniendo stats:', error);
             res.status(500).json({ message: 'Error al obtener estadísticas' });
         }
     });
@@ -45,7 +45,7 @@ module.exports = (db) => {
                 pendientesProductos: productosPendientes?.count || 0
             });
         } catch (error) {
-            console.error('Error obteniendo user-stats:', error);
+            console.error('❌ Error obteniendo user-stats:', error);
             res.status(500).json({ message: 'Error al obtener estadísticas' });
         }
     });
@@ -109,9 +109,10 @@ module.exports = (db) => {
                 );
             }
             
+            console.log(`✅ [ADMIN] Producto ${productId} ${approved ? 'aprobado' : 'rechazado'}`);
             res.json({ message: approved ? 'Producto aprobado' : 'Producto rechazado' });
         } catch (error) {
-            console.error('Error aprobando producto:', error);
+            console.error('❌ Error aprobando producto:', error);
             res.status(500).json({ message: 'Error al procesar el producto' });
         }
     });
@@ -132,9 +133,10 @@ module.exports = (db) => {
             
             parsedVendors.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
             
+            console.log(`📊 [ADMIN] Vendedores pendientes encontrados: ${parsedVendors.length}`);
             res.json({ vendors: parsedVendors });
         } catch (error) {
-            console.error('Error obteniendo vendedores pendientes:', error);
+            console.error('❌ Error obteniendo vendedores pendientes:', error);
             res.status(500).json({ message: 'Error al obtener vendedores pendientes' });
         }
     });
@@ -161,9 +163,10 @@ module.exports = (db) => {
                 );
             }
             
+            console.log(`✅ [ADMIN] Vendedor ${userId} ${approved ? 'aprobado' : 'rechazado'}`);
             res.json({ message: approved ? 'Vendedor aprobado exitosamente' : 'Vendedor rechazado' });
         } catch (error) {
-            console.error('Error procesando vendedor:', error);
+            console.error('❌ Error procesando vendedor:', error);
             res.status(500).json({ message: 'Error al procesar la solicitud' });
         }
     });
@@ -183,9 +186,10 @@ module.exports = (db) => {
                  ORDER BY pc.createdAt ASC`
             );
             
+            console.log(`📊 [ADMIN] Cambios de perfil pendientes: ${changes.length}`);
             res.json({ changes });
         } catch (error) {
-            console.error('Error obteniendo cambios pendientes:', error);
+            console.error('❌ Error obteniendo cambios pendientes:', error);
             res.status(500).json({ message: 'Error al obtener cambios pendientes' });
         }
     });
@@ -264,6 +268,7 @@ module.exports = (db) => {
                 [change.userId, title, message]
             );
             
+            console.log(`✅ [ADMIN] Cambio de perfil ${changeId} ${approved ? 'aprobado' : 'rechazado'}`);
             res.json({ message: approved ? 'Cambios aprobados' : 'Cambios rechazados' });
         } catch (error) {
             console.error('❌ Error procesando cambio de perfil:', error);
@@ -302,9 +307,10 @@ module.exports = (db) => {
                  `Tu producto "${product[0].name}" ha sido ocultado por el administrador. Motivo: ${reason || 'No especificado'}`]
             );
 
+            console.log(`✅ [ADMIN] Producto ${id} ocultado`);
             res.json({ success: true, message: 'Producto ocultado correctamente' });
         } catch (error) {
-            console.error('Error ocultando producto:', error);
+            console.error('❌ Error ocultando producto:', error);
             res.status(500).json({ message: 'Error al ocultar producto' });
         }
     });
@@ -337,9 +343,10 @@ module.exports = (db) => {
                  `Tu producto "${product[0].name}" ha sido restaurado y ya está visible nuevamente.`]
             );
 
+            console.log(`✅ [ADMIN] Producto ${id} restaurado`);
             res.json({ success: true, message: 'Producto restaurado correctamente' });
         } catch (error) {
-            console.error('Error restaurando producto:', error);
+            console.error('❌ Error restaurando producto:', error);
             res.status(500).json({ message: 'Error al restaurar producto' });
         }
     });

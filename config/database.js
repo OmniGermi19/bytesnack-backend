@@ -3,6 +3,7 @@ const mysql = require('mysql2/promise');
 
 let pool = null;
 let connection = null;
+let isShuttingDown = false;
 
 /**
  * Obtiene un pool de conexiones a MySQL
@@ -40,6 +41,16 @@ async function getPool() {
         console.log('✅ [DB] Pool de conexiones establecido correctamente');
         testConn.release();
         
+        // Manejar errores del pool
+        pool.on('error', (err) => {
+            console.error('❌ [DB] Error en el pool:', err.message);
+            if (err.code === 'PROTOCOL_CONNECTION_LOST') {
+                console.log('🔄 [DB] Intentando reconectar...');
+                pool = null;
+                getPool().catch(e => console.error('❌ [DB] Error al reconectar:', e.message));
+            }
+        });
+        
         return pool;
     } catch (error) {
         console.error('❌ [DB] Error creando pool de conexiones:', error.message);
@@ -56,8 +67,8 @@ async function getConnection() {
         return connection;
     }
     
-    const pool = await getPool();
-    connection = await pool.getConnection();
+    const poolConn = await getPool();
+    connection = await poolConn.getConnection();
     return connection;
 }
 
@@ -97,6 +108,9 @@ async function transaction(callback) {
  * Cierra todas las conexiones (útil para graceful shutdown)
  */
 async function closeConnections() {
+    if (isShuttingDown) return;
+    isShuttingDown = true;
+    
     if (connection) {
         await connection.release();
         connection = null;
@@ -106,6 +120,7 @@ async function closeConnections() {
         pool = null;
         console.log('🔌 [DB] Conexiones cerradas correctamente');
     }
+    isShuttingDown = false;
 }
 
 // Manejar cierre de la aplicación

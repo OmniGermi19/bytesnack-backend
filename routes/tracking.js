@@ -9,12 +9,13 @@ module.exports = (db, trackingService) => {
     router.post('/start', authenticateToken, isSeller, async (req, res) => {
         const { orderId } = req.body;
         
+        console.log(`📍 [Tracking] Iniciando tracking para pedido ${orderId} por vendedor ${req.userId}`);
+        
         if (!orderId) {
             return res.status(400).json({ message: 'ID de pedido requerido' });
         }
         
         try {
-            // Verificar que el usuario es el vendedor del pedido
             const [orders] = await db.query(
                 `SELECT o.id, o.status, p.sellerId, p.sellerName, u.nombreCompleto as sellerNameFull
                  FROM orders o
@@ -31,12 +32,10 @@ module.exports = (db, trackingService) => {
             
             const order = orders[0];
             
-            // Verificar que el pedido está en estado de envío
             if (order.status !== 'processing' && order.status !== 'shipped') {
                 return res.status(400).json({ message: 'El pedido no está en estado de envío' });
             }
             
-            // Iniciar sesión de tracking
             await db.query(
                 `INSERT INTO tracking_sessions (orderId, sellerId, sellerName, status, startedAt, updatedAt)
                  VALUES (?, ?, ?, 'active', NOW(), NOW())
@@ -44,11 +43,11 @@ module.exports = (db, trackingService) => {
                 [orderId, req.userId, order.sellerNameFull]
             );
             
-            // Notificar vía WebSocket si el servicio está disponible
             if (trackingService) {
                 trackingService.setSellerName(orderId, order.sellerNameFull);
             }
             
+            console.log(`✅ [Tracking] Tracking iniciado para pedido ${orderId}`);
             res.json({ 
                 success: true, 
                 message: 'Seguimiento iniciado correctamente',
@@ -64,6 +63,8 @@ module.exports = (db, trackingService) => {
     router.post('/stop', authenticateToken, async (req, res) => {
         const { orderId } = req.body;
         
+        console.log(`📍 [Tracking] Deteniendo tracking para pedido ${orderId} por usuario ${req.userId}`);
+        
         if (!orderId) {
             return res.status(400).json({ message: 'ID de pedido requerido' });
         }
@@ -76,6 +77,7 @@ module.exports = (db, trackingService) => {
                 [orderId, req.userId]
             );
             
+            console.log(`✅ [Tracking] Tracking detenido para pedido ${orderId}`);
             res.json({ success: true, message: 'Seguimiento detenido correctamente' });
         } catch (error) {
             console.error('❌ Error deteniendo tracking:', error);
@@ -86,6 +88,8 @@ module.exports = (db, trackingService) => {
     // POST /api/tracking/location - Actualizar ubicación (vendedor)
     router.post('/location', authenticateToken, isSeller, async (req, res) => {
         const { orderId, lat, lng, address, speed, accuracy } = req.body;
+        
+        console.log(`📍 [Tracking] Actualizando ubicación para pedido ${orderId}: (${lat}, ${lng})`);
         
         if (!orderId || lat === undefined || lng === undefined) {
             return res.status(400).json({ message: 'Datos incompletos: se requiere orderId, lat, lng' });
@@ -100,7 +104,6 @@ module.exports = (db, trackingService) => {
         }
 
         try {
-            // Verificar que el usuario es el vendedor
             const [sessionCheck] = await db.query(
                 `SELECT sellerId FROM tracking_sessions WHERE orderId = ?`,
                 [orderId]
@@ -110,7 +113,6 @@ module.exports = (db, trackingService) => {
                 return res.status(403).json({ message: 'No tienes permiso' });
             }
             
-            // Actualizar última ubicación en la sesión
             await db.query(
                 `UPDATE tracking_sessions 
                  SET lastLat = ?, lastLng = ?, lastAddress = ?, lastSpeed = ?, lastAccuracy = ?, lastLocationUpdate = NOW(), updatedAt = NOW()
@@ -118,13 +120,13 @@ module.exports = (db, trackingService) => {
                 [lat, lng, address || null, speed || null, accuracy || null, orderId]
             );
 
-            // Guardar en historial
             await db.query(
                 `INSERT INTO tracking_locations (orderId, lat, lng, address, speed, accuracy, createdAt)
                  VALUES (?, ?, ?, ?, ?, ?, NOW())`,
                 [orderId, lat, lng, address || null, speed || null, accuracy || null]
             );
 
+            console.log(`✅ [Tracking] Ubicación actualizada para pedido ${orderId}`);
             res.json({ success: true, message: 'Ubicación actualizada' });
         } catch (error) {
             console.error('❌ Error guardando ubicación:', error);
@@ -132,12 +134,13 @@ module.exports = (db, trackingService) => {
         }
     });
 
-    // ✅ GET /api/tracking/status/:orderId - Obtener estado del tracking (CORREGIDO)
+    // GET /api/tracking/status/:orderId - Obtener estado del tracking
     router.get('/status/:orderId', authenticateToken, async (req, res) => {
         const { orderId } = req.params;
         
+        console.log(`📍 [Tracking] Consultando estado de tracking para pedido ${orderId} por usuario ${req.userId}`);
+        
         try {
-            // Obtener sesión de tracking
             const [sessions] = await db.query(
                 `SELECT ts.*, u.nombreCompleto as sellerName,
                         o.sellerConfirmed, o.buyerReceived, o.status as orderStatus
@@ -148,7 +151,6 @@ module.exports = (db, trackingService) => {
                 [orderId]
             );
             
-            // Verificar permisos del usuario
             const [orderCheck] = await db.query(
                 `SELECT userId FROM orders WHERE id = ?`,
                 [orderId]
@@ -162,14 +164,11 @@ module.exports = (db, trackingService) => {
                 return res.status(403).json({ message: 'No tienes permiso para ver este tracking' });
             }
             
-            // Si no hay sesión de tracking
             if (sessions.length === 0) {
-                // Verificar si el pedido existe
                 if (orderCheck.length === 0) {
                     return res.status(404).json({ message: 'Pedido no encontrado' });
                 }
                 
-                // Obtener estado de confirmaciones del pedido
                 const [order] = await db.query(
                     `SELECT sellerConfirmed, buyerReceived, status FROM orders WHERE id = ?`,
                     [orderId]
@@ -185,7 +184,6 @@ module.exports = (db, trackingService) => {
             
             const session = sessions[0];
             
-            // Construir respuesta completa
             const response = {
                 active: session.status === 'active',
                 orderId: session.orderId,
@@ -194,11 +192,9 @@ module.exports = (db, trackingService) => {
                 status: session.status,
                 startedAt: session.startedAt,
                 endedAt: session.endedAt,
-                // Confirmaciones del pedido
                 sellerConfirmed: session.sellerConfirmed === 1,
                 buyerReceived: session.buyerReceived === 1,
                 orderStatus: session.orderStatus,
-                // Última ubicación si existe
                 lastLocation: session.lastLat && session.lastLng ? {
                     lat: parseFloat(session.lastLat),
                     lng: parseFloat(session.lastLng),
@@ -209,6 +205,7 @@ module.exports = (db, trackingService) => {
                 } : null
             };
             
+            console.log(`✅ [Tracking] Estado obtenido: active=${response.active}`);
             res.json(response);
         } catch (error) {
             console.error('❌ Error obteniendo estado de tracking:', error);
@@ -221,8 +218,9 @@ module.exports = (db, trackingService) => {
         const { orderId } = req.params;
         const { limit = 50 } = req.query;
         
+        console.log(`📍 [Tracking] Obteniendo historial de ubicaciones para pedido ${orderId}`);
+        
         try {
-            // Verificar permisos
             const [orderCheck] = await db.query(
                 `SELECT userId FROM orders WHERE id = ?`,
                 [orderId]
@@ -253,7 +251,6 @@ module.exports = (db, trackingService) => {
                 [orderId, parseInt(limit)]
             );
             
-            // Procesar ubicaciones
             const processedLocations = locations.map(loc => ({
                 lat: parseFloat(loc.lat),
                 lng: parseFloat(loc.lng),
@@ -261,8 +258,9 @@ module.exports = (db, trackingService) => {
                 speed: loc.speed ? parseFloat(loc.speed) : null,
                 accuracy: loc.accuracy ? parseFloat(loc.accuracy) : null,
                 timestamp: loc.createdAt
-            })).reverse(); // Orden cronológico
+            })).reverse();
             
+            console.log(`✅ [Tracking] ${processedLocations.length} ubicaciones obtenidas`);
             res.json({ locations: processedLocations });
         } catch (error) {
             console.error('❌ Error obteniendo historial:', error);

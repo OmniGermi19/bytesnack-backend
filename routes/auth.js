@@ -21,6 +21,8 @@ module.exports = (db) => {
             isVendedorTambien
         } = req.body;
 
+        console.log(`📝 [Auth] Registro de ${role}: ${numeroControl}`);
+
         // Validaciones de formato de número de control
         if (role === 'Vendedor') {
             const vendedorRegex = /^\d{8}V$/i;
@@ -50,6 +52,7 @@ module.exports = (db) => {
             );
 
             if (existing.length > 0) {
+                console.log(`❌ [Auth] Número de control ya registrado: ${numeroControl}`);
                 return res.status(400).json({ message: 'El número de control ya está registrado' });
             }
 
@@ -65,6 +68,7 @@ module.exports = (db) => {
             // Para administrador, verificar código de acceso
             if (role === 'Administrador') {
                 if (codigoAcceso !== process.env.ADMIN_SECRET_CODE) {
+                    console.log(`❌ [Auth] Código de acceso inválido para administrador`);
                     return res.status(403).json({ message: 'Código de acceso inválido' });
                 }
             }
@@ -112,6 +116,8 @@ module.exports = (db) => {
                 [result.insertId]
             );
 
+            console.log(`✅ [Auth] Usuario registrado: ${numeroControl} (ID: ${result.insertId})`);
+
             res.status(201).json({
                 token,
                 refreshToken,
@@ -122,7 +128,7 @@ module.exports = (db) => {
             });
 
         } catch (error) {
-            console.error('Error en registro:', error);
+            console.error('❌ Error en registro:', error);
             res.status(500).json({ message: 'Error al registrar usuario: ' + error.message });
         }
     });
@@ -130,6 +136,8 @@ module.exports = (db) => {
     // POST /api/auth/login - Inicio de sesión
     router.post('/login', async (req, res) => {
         const { numeroControl, password, codigoAcceso, role } = req.body;
+
+        console.log(`🔐 [Auth] Intento de login: ${numeroControl} como ${role}`);
 
         if (!numeroControl) {
             return res.status(400).json({ message: 'Número de control requerido' });
@@ -145,16 +153,19 @@ module.exports = (db) => {
             );
 
             if (users.length === 0) {
+                console.log(`❌ [Auth] Número de control no registrado: ${numeroControl}`);
                 return res.status(401).json({ message: 'Número de control no registrado' });
             }
 
             const user = users[0];
 
             if (!user.isActive) {
+                console.log(`❌ [Auth] Cuenta inactiva: ${numeroControl}`);
                 return res.status(401).json({ message: 'Cuenta desactivada o pendiente de aprobación. Contacta al administrador.' });
             }
 
             if (user.role !== role) {
+                console.log(`❌ [Auth] Rol incorrecto: ${user.role} vs ${role}`);
                 return res.status(401).json({ message: `No tienes una cuenta de ${role}` });
             }
 
@@ -171,6 +182,7 @@ module.exports = (db) => {
             }
 
             if (!isValid) {
+                console.log(`❌ [Auth] Credenciales incorrectas para: ${numeroControl}`);
                 return res.status(401).json({ message: 'Credenciales incorrectas' });
             }
 
@@ -189,6 +201,8 @@ module.exports = (db) => {
             delete user.password;
             delete user.codigoAcceso;
 
+            console.log(`✅ [Auth] Login exitoso: ${numeroControl} (${user.role})`);
+
             res.json({
                 token,
                 refreshToken,
@@ -197,7 +211,7 @@ module.exports = (db) => {
             });
 
         } catch (error) {
-            console.error('Error en login:', error);
+            console.error('❌ Error en login:', error);
             res.status(500).json({ message: 'Error al iniciar sesión' });
         }
     });
@@ -228,16 +242,18 @@ module.exports = (db) => {
                 { expiresIn: '7d' }
             );
 
+            console.log(`✅ [Auth] Token refrescado para usuario ${users[0].id}`);
             res.json({ token: newToken });
 
         } catch (error) {
-            console.error('Error refrescando token:', error);
+            console.error('❌ Error refrescando token:', error);
             res.status(401).json({ message: 'Refresh token inválido' });
         }
     });
 
     // POST /api/auth/logout - Cerrar sesión
     router.post('/logout', (req, res) => {
+        console.log('🔓 [Auth] Cierre de sesión');
         res.json({ message: 'Sesión cerrada exitosamente' });
     });
 
@@ -252,46 +268,35 @@ module.exports = (db) => {
         }
         
         try {
-            // Buscar usuario por email
             const [users] = await db.query(
                 'SELECT id, nombreCompleto FROM users WHERE email = ?',
                 [email]
             );
             
             if (users.length === 0) {
-                // Por seguridad, no revelamos si el email existe o no
                 return res.json({ message: 'Si el correo existe, recibirás un enlace de recuperación' });
             }
             
             const user = users[0];
             
-            // Generar token único
             const token = crypto.randomBytes(32).toString('hex');
             const expiresAt = new Date();
-            expiresAt.setHours(expiresAt.getHours() + 1); // Expira en 1 hora
+            expiresAt.setHours(expiresAt.getHours() + 1);
             
-            // Guardar token en la base de datos
             await db.query(
                 `INSERT INTO password_resets (userId, token, expiresAt, used, createdAt)
                  VALUES (?, ?, ?, FALSE, NOW())`,
                 [user.id, token, expiresAt]
             );
             
-            console.log(`🔐 Token de recuperación para ${user.nombreCompleto} (${email}): ${token}`);
-            console.log(`🔗 Enlace: /reset_password?token=${token}`);
-            
-            // En producción, aquí enviarías un correo electrónico
-            // await sendEmail(email, 'Recuperación de contraseña', 
-            //   `Haz clic en el siguiente enlace para restablecer tu contraseña:\n\n
-            //    https://tu-app.com/reset-password?token=${token}\n\n
-            //    Este enlace expirará en 1 hora.`);
+            console.log(`🔐 [Auth] Token de recuperación para ${user.nombreCompleto} (${email}): ${token}`);
             
             res.json({ 
                 message: 'Si el correo existe, recibirás un enlace de recuperación',
-                token: token // Solo en desarrollo, eliminar en producción
+                token: process.env.NODE_ENV === 'development' ? token : undefined
             });
         } catch (error) {
-            console.error('Error en forgot-password:', error);
+            console.error('❌ Error en forgot-password:', error);
             res.status(500).json({ message: 'Error al procesar la solicitud' });
         }
     });
@@ -317,7 +322,7 @@ module.exports = (db) => {
             
             res.json({ message: 'Token válido' });
         } catch (error) {
-            console.error('Error en verify-reset-token:', error);
+            console.error('❌ Error en verify-reset-token:', error);
             res.status(500).json({ message: 'Error al verificar el token' });
         }
     });
@@ -335,7 +340,6 @@ module.exports = (db) => {
         }
         
         try {
-            // Verificar token
             const [resets] = await db.query(
                 `SELECT * FROM password_resets 
                  WHERE token = ? AND used = FALSE AND expiresAt > NOW()`,
@@ -348,24 +352,22 @@ module.exports = (db) => {
             
             const reset = resets[0];
             
-            // Hashear nueva contraseña
             const hashedPassword = await bcrypt.hash(password, 10);
             
-            // Actualizar contraseña del usuario
             await db.query(
                 'UPDATE users SET password = ?, updatedAt = NOW() WHERE id = ?',
                 [hashedPassword, reset.userId]
             );
             
-            // Marcar token como usado
             await db.query(
                 'UPDATE password_resets SET used = TRUE WHERE id = ?',
                 [reset.id]
             );
             
+            console.log(`✅ [Auth] Contraseña restablecida para usuario ${reset.userId}`);
             res.json({ message: 'Contraseña restablecida correctamente' });
         } catch (error) {
-            console.error('Error en reset-password:', error);
+            console.error('❌ Error en reset-password:', error);
             res.status(500).json({ message: 'Error al restablecer la contraseña' });
         }
     });

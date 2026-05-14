@@ -8,6 +8,8 @@ module.exports = (db) => {
     router.post('/', authenticateToken, async (req, res) => {
         const { orderId, productId, productName, rating, comment, images } = req.body;
 
+        console.log(`⭐ [Reviews] Nueva reseña: usuario ${req.userId} califica producto ${productId} con ${rating} estrellas`);
+
         if (!orderId || !productId || !rating) {
             return res.status(400).json({ message: 'Faltan campos requeridos' });
         }
@@ -65,6 +67,7 @@ module.exports = (db) => {
                 );
             }
 
+            console.log(`✅ [Reviews] Reseña creada (ID: ${result.insertId})`);
             res.status(201).json({ 
                 success: true, 
                 id: result.insertId,
@@ -72,7 +75,7 @@ module.exports = (db) => {
             });
 
         } catch (error) {
-            console.error('Error creando reseña:', error);
+            console.error('❌ Error creando reseña:', error);
             res.status(500).json({ message: 'Error al guardar la calificación' });
         }
     });
@@ -82,6 +85,8 @@ module.exports = (db) => {
         const { productId } = req.params;
         const { page = 1, limit = 10 } = req.query;
         const offset = (parseInt(page) - 1) * parseInt(limit);
+
+        console.log(`⭐ [Reviews] Obteniendo reseñas del producto ${productId} - página ${page}`);
 
         try {
             const [reviews] = await db.query(
@@ -127,6 +132,7 @@ module.exports = (db) => {
                 [productId]
             );
 
+            console.log(`✅ [Reviews] ${reviews.length} reseñas encontradas, promedio: ${stats[0].averageRating || 0}`);
             res.json({
                 reviews,
                 stats: {
@@ -143,7 +149,7 @@ module.exports = (db) => {
             });
 
         } catch (error) {
-            console.error('Error obteniendo reseñas:', error);
+            console.error('❌ Error obteniendo reseñas:', error);
             res.status(500).json({ message: 'Error al obtener reseñas' });
         }
     });
@@ -151,6 +157,8 @@ module.exports = (db) => {
     // POST /api/reviews/:reviewId/like - Dar like a una reseña
     router.post('/:reviewId/like', authenticateToken, async (req, res) => {
         const { reviewId } = req.params;
+
+        console.log(`⭐ [Reviews] Usuario ${req.userId} da like a reseña ${reviewId}`);
 
         try {
             const [existing] = await db.query(
@@ -167,6 +175,7 @@ module.exports = (db) => {
                     'UPDATE reviews SET likes = likes - 1 WHERE id = ?',
                     [reviewId]
                 );
+                console.log(`✅ [Reviews] Like removido de reseña ${reviewId}`);
                 res.json({ liked: false, message: 'Like removido' });
             } else {
                 await db.query(
@@ -177,11 +186,12 @@ module.exports = (db) => {
                     'UPDATE reviews SET likes = likes + 1 WHERE id = ?',
                     [reviewId]
                 );
+                console.log(`✅ [Reviews] Like agregado a reseña ${reviewId}`);
                 res.json({ liked: true, message: 'Like agregado' });
             }
 
         } catch (error) {
-            console.error('Error procesando like:', error);
+            console.error('❌ Error procesando like:', error);
             res.status(500).json({ message: 'Error al procesar like' });
         }
     });
@@ -190,6 +200,8 @@ module.exports = (db) => {
     router.post('/:reviewId/reply', authenticateToken, async (req, res) => {
         const { reviewId } = req.params;
         const { comment } = req.body;
+
+        console.log(`⭐ [Reviews] Usuario ${req.userId} responde a reseña ${reviewId}`);
 
         if (!comment || comment.trim().isEmpty) {
             return res.status(400).json({ message: 'El comentario es requerido' });
@@ -231,16 +243,19 @@ module.exports = (db) => {
                  `El vendedor respondió a tu reseña del producto "${reviewInfo[0].productName}"`]
             );
 
+            console.log(`✅ [Reviews] Respuesta enviada a reseña ${reviewId}`);
             res.json({ success: true, message: 'Respuesta enviada' });
 
         } catch (error) {
-            console.error('Error respondiendo reseña:', error);
+            console.error('❌ Error respondiendo reseña:', error);
             res.status(500).json({ message: 'Error al enviar respuesta' });
         }
     });
 
     // GET /api/reviews/user - Obtener reseñas del usuario
     router.get('/user', authenticateToken, async (req, res) => {
+        console.log(`⭐ [Reviews] Obteniendo reseñas del usuario ${req.userId}`);
+
         try {
             const [reviews] = await db.query(
                 `SELECT r.*, 
@@ -261,9 +276,10 @@ module.exports = (db) => {
                 }
             }
 
+            console.log(`✅ [Reviews] ${reviews.length} reseñas encontradas`);
             res.json(reviews);
         } catch (error) {
-            console.error('Error obteniendo reseñas:', error);
+            console.error('❌ Error obteniendo reseñas:', error);
             res.status(500).json({ message: 'Error al obtener reseñas' });
         }
     });
@@ -271,6 +287,8 @@ module.exports = (db) => {
     // DELETE /api/reviews/:reviewId - Eliminar reseña
     router.delete('/:reviewId', authenticateToken, async (req, res) => {
         const { reviewId } = req.params;
+
+        console.log(`⭐ [Reviews] Eliminando reseña ${reviewId} por usuario ${req.userId}`);
 
         try {
             const [review] = await db.query(
@@ -289,10 +307,11 @@ module.exports = (db) => {
             await db.query('DELETE FROM reviews WHERE id = ?', [reviewId]);
             await _updateProductRating(db, review[0].productId);
 
+            console.log(`✅ [Reviews] Reseña ${reviewId} eliminada`);
             res.json({ success: true, message: 'Reseña eliminada' });
 
         } catch (error) {
-            console.error('Error eliminando reseña:', error);
+            console.error('❌ Error eliminando reseña:', error);
             res.status(500).json({ message: 'Error al eliminar reseña' });
         }
     });

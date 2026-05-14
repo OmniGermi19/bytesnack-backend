@@ -7,6 +7,8 @@ module.exports = (db) => {
     // GET /api/cart - Obtener carrito del usuario
     router.get('/', authenticateToken, async (req, res) => {
         try {
+            console.log(`🛒 [Cart] Obteniendo carrito de usuario ${req.userId}`);
+            
             const [items] = await db.query(
                 `SELECT ci.*, p.name, p.price, p.images, p.stock, p.sellerId, p.sellerName, p.isAvailable
                  FROM cart_items ci 
@@ -28,9 +30,10 @@ module.exports = (db) => {
                 isAvailable: item.isAvailable === 1
             }));
             
+            console.log(`✅ [Cart] Carrito obtenido: ${cartItems.length} items`);
             res.json({ items: cartItems });
         } catch (error) {
-            console.error('Error obteniendo carrito:', error);
+            console.error('❌ Error obteniendo carrito:', error);
             res.status(500).json({ message: 'Error al obtener carrito' });
         }
     });
@@ -39,12 +42,13 @@ module.exports = (db) => {
     router.post('/add', authenticateToken, async (req, res) => {
         const { productId, quantity = 1 } = req.body;
         
+        console.log(`🛒 [Cart] Agregando producto ${productId} x${quantity} para usuario ${req.userId}`);
+        
         if (!productId) {
             return res.status(400).json({ message: 'Producto no especificado' });
         }
         
         try {
-            // Verificar que el producto existe y está disponible
             const [products] = await db.query(
                 'SELECT id, stock, isAvailable, status FROM products WHERE id = ?',
                 [productId]
@@ -65,10 +69,9 @@ module.exports = (db) => {
             }
             
             if (product.stock < quantity) {
-                return res.status(400).json({ message: 'Stock insuficiente' });
+                return res.status(400).json({ message: `Stock insuficiente. Disponible: ${product.stock}` });
             }
             
-            // Verificar si ya existe en el carrito
             const [existing] = await db.query(
                 'SELECT id, quantity FROM cart_items WHERE userId = ? AND productId = ?',
                 [req.userId, productId]
@@ -80,14 +83,15 @@ module.exports = (db) => {
                     'UPDATE cart_items SET quantity = ?, addedAt = NOW() WHERE id = ?',
                     [newQuantity, existing[0].id]
                 );
+                console.log(`✅ [Cart] Cantidad actualizada a ${newQuantity}`);
             } else {
                 await db.query(
                     'INSERT INTO cart_items (userId, productId, quantity, addedAt) VALUES (?, ?, ?, NOW())',
                     [req.userId, productId, quantity]
                 );
+                console.log(`✅ [Cart] Producto agregado al carrito`);
             }
             
-            // Obtener carrito actualizado
             const [updatedItems] = await db.query(
                 `SELECT ci.*, p.name, p.price, p.images, p.sellerId, p.sellerName
                  FROM cart_items ci 
@@ -103,7 +107,7 @@ module.exports = (db) => {
             });
             
         } catch (error) {
-            console.error('Error agregando al carrito:', error);
+            console.error('❌ Error agregando al carrito:', error);
             res.status(500).json({ message: 'Error al agregar al carrito' });
         }
     });
@@ -113,27 +117,28 @@ module.exports = (db) => {
         const { quantity } = req.body;
         const productId = req.params.productId;
         
+        console.log(`🛒 [Cart] Actualizando producto ${productId} a cantidad ${quantity} para usuario ${req.userId}`);
+        
         if (quantity === undefined) {
             return res.status(400).json({ message: 'Cantidad no especificada' });
         }
         
         try {
             if (quantity <= 0) {
-                // Eliminar del carrito
                 await db.query(
                     'DELETE FROM cart_items WHERE userId = ? AND productId = ?',
                     [req.userId, productId]
                 );
+                console.log(`✅ [Cart] Producto eliminado del carrito`);
                 res.json({ success: true, message: 'Producto eliminado del carrito', removed: true });
             } else {
-                // Verificar stock
                 const [products] = await db.query(
                     'SELECT stock FROM products WHERE id = ?',
                     [productId]
                 );
                 
                 if (products.length > 0 && products[0].stock < quantity) {
-                    return res.status(400).json({ message: 'Stock insuficiente' });
+                    return res.status(400).json({ message: `Stock insuficiente. Disponible: ${products[0].stock}` });
                 }
                 
                 await db.query(
@@ -142,10 +147,11 @@ module.exports = (db) => {
                      ON DUPLICATE KEY UPDATE quantity = ?, addedAt = NOW()`,
                     [req.userId, productId, quantity, quantity]
                 );
+                console.log(`✅ [Cart] Cantidad actualizada a ${quantity}`);
                 res.json({ success: true, message: 'Carrito actualizado', updated: true });
             }
         } catch (error) {
-            console.error('Error actualizando carrito:', error);
+            console.error('❌ Error actualizando carrito:', error);
             res.status(500).json({ message: 'Error al actualizar carrito' });
         }
     });
@@ -154,6 +160,8 @@ module.exports = (db) => {
     router.delete('/:productId', authenticateToken, async (req, res) => {
         const productId = req.params.productId;
         
+        console.log(`🛒 [Cart] Eliminando producto ${productId} del carrito de usuario ${req.userId}`);
+        
         try {
             const [result] = await db.query(
                 'DELETE FROM cart_items WHERE userId = ? AND productId = ?',
@@ -161,40 +169,44 @@ module.exports = (db) => {
             );
             
             if (result.affectedRows > 0) {
+                console.log(`✅ [Cart] Producto eliminado`);
                 res.json({ success: true, message: 'Producto eliminado del carrito' });
             } else {
                 res.status(404).json({ message: 'Producto no encontrado en el carrito' });
             }
         } catch (error) {
-            console.error('Error eliminando item:', error);
+            console.error('❌ Error eliminando item:', error);
             res.status(500).json({ message: 'Error al eliminar producto' });
         }
     });
 
     // DELETE /api/cart - Vaciar carrito completo
     router.delete('/', authenticateToken, async (req, res) => {
+        console.log(`🛒 [Cart] Vaciando carrito completo de usuario ${req.userId}`);
+        
         try {
             await db.query('DELETE FROM cart_items WHERE userId = ?', [req.userId]);
+            console.log(`✅ [Cart] Carrito vaciado`);
             res.json({ success: true, message: 'Carrito vaciado' });
         } catch (error) {
-            console.error('Error vaciando carrito:', error);
+            console.error('❌ Error vaciando carrito:', error);
             res.status(500).json({ message: 'Error al vaciar carrito' });
         }
     });
 
-    // POST /api/cart/sync - Sincronizar carrito completo (para múltiples items)
+    // POST /api/cart/sync - Sincronizar carrito completo
     router.post('/sync', authenticateToken, async (req, res) => {
         const { items } = req.body;
+        
+        console.log(`🛒 [Cart] Sincronizando carrito de usuario ${req.userId} con ${items?.length || 0} items`);
         
         if (!items || !Array.isArray(items)) {
             return res.status(400).json({ message: 'Datos inválidos' });
         }
         
         try {
-            // Primero vaciar carrito actual
             await db.query('DELETE FROM cart_items WHERE userId = ?', [req.userId]);
             
-            // Insertar nuevos items
             for (const item of items) {
                 if (item.quantity > 0) {
                     await db.query(
@@ -204,9 +216,10 @@ module.exports = (db) => {
                 }
             }
             
+            console.log(`✅ [Cart] Carrito sincronizado`);
             res.json({ success: true, message: 'Carrito sincronizado' });
         } catch (error) {
-            console.error('Error sincronizando carrito:', error);
+            console.error('❌ Error sincronizando carrito:', error);
             res.status(500).json({ message: 'Error al sincronizar carrito' });
         }
     });

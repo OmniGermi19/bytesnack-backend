@@ -31,10 +31,10 @@ app.use((req, res, next) => {
 let pool;
 
 if (process.env.DATABASE_URL) {
-    console.log('📡 Conectando usando DATABASE_URL');
+    console.log('📡 [DB] Conectando usando DATABASE_URL');
     pool = mysql.createPool(process.env.DATABASE_URL);
 } else {
-    console.log('📡 Conectando usando variables individuales');
+    console.log('📡 [DB] Conectando usando variables individuales');
     pool = mysql.createPool({
         host: process.env.MYSQLHOST || process.env.DB_HOST || 'mysql.railway.internal',
         port: parseInt(process.env.MYSQLPORT || process.env.DB_PORT || '3306'),
@@ -52,9 +52,9 @@ const db = pool.promise();
 
 pool.getConnection((err, connection) => {
     if (err) {
-        console.error('❌ ERROR conectando a MySQL:', err.message);
+        console.error('❌ [DB] ERROR conectando a MySQL:', err.message);
     } else {
-        console.log('✅ Conectado a MySQL correctamente');
+        console.log('✅ [DB] Conectado a MySQL correctamente');
         connection.release();
         inicializarBaseDatos();
     }
@@ -71,18 +71,20 @@ async function addColumnIfNotExists(tableName, columnName, columnDefinition) {
         
         if (exists[0].count === 0) {
             await db.query(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnDefinition}`);
-            console.log(`✅ Columna ${columnName} agregada a ${tableName}`);
+            console.log(`✅ [DB] Columna ${columnName} agregada a ${tableName}`);
             return true;
         }
         return false;
     } catch (error) {
-        console.log(`ℹ️ Columna ${columnName} ya existe o no se pudo verificar`);
+        console.log(`ℹ️ [DB] Columna ${columnName} ya existe o no se pudo verificar`);
         return false;
     }
 }
 
 async function inicializarBaseDatos() {
     try {
+        console.log('📦 [DB] Inicializando base de datos...');
+        
         // ============ AGREGAR COLUMNAS FALTANTES A TABLAS EXISTENTES ============
         
         await addColumnIfNotExists('orders', 'sellerConfirmed', 'BOOLEAN DEFAULT FALSE');
@@ -132,7 +134,7 @@ async function inicializarBaseDatos() {
             INDEX idx_role (role),
             INDEX idx_isActive (isActive)
         )`);
-        console.log('✅ Tabla users verificada');
+        console.log('✅ [DB] Tabla users verificada');
 
         await db.query(`CREATE TABLE IF NOT EXISTS products (
             id INT PRIMARY KEY AUTO_INCREMENT,
@@ -158,7 +160,7 @@ async function inicializarBaseDatos() {
             INDEX idx_category (category),
             FULLTEXT INDEX idx_search (name, description)
         )`);
-        console.log('✅ Tabla products verificada');
+        console.log('✅ [DB] Tabla products verificada');
 
         await db.query(`CREATE TABLE IF NOT EXISTS cart_items (
             id INT PRIMARY KEY AUTO_INCREMENT,
@@ -170,7 +172,7 @@ async function inicializarBaseDatos() {
             FOREIGN KEY (productId) REFERENCES products(id) ON DELETE CASCADE,
             UNIQUE KEY unique_cart_item (userId, productId)
         )`);
-        console.log('✅ Tabla cart_items verificada');
+        console.log('✅ [DB] Tabla cart_items verificada');
 
         await db.query(`CREATE TABLE IF NOT EXISTS orders (
             id INT PRIMARY KEY AUTO_INCREMENT,
@@ -189,7 +191,7 @@ async function inicializarBaseDatos() {
             INDEX idx_userId (userId),
             INDEX idx_status (status)
         )`);
-        console.log('✅ Tabla orders verificada');
+        console.log('✅ [DB] Tabla orders verificada');
 
         await db.query(`CREATE TABLE IF NOT EXISTS order_items (
             id INT PRIMARY KEY AUTO_INCREMENT,
@@ -202,7 +204,7 @@ async function inicializarBaseDatos() {
             FOREIGN KEY (orderId) REFERENCES orders(id) ON DELETE CASCADE,
             INDEX idx_orderId (orderId)
         )`);
-        console.log('✅ Tabla order_items verificada');
+        console.log('✅ [DB] Tabla order_items verificada');
 
         await db.query(`CREATE TABLE IF NOT EXISTS notifications (
             id INT PRIMARY KEY AUTO_INCREMENT,
@@ -216,7 +218,7 @@ async function inicializarBaseDatos() {
             INDEX idx_userId (userId),
             INDEX idx_isRead (isRead)
         )`);
-        console.log('✅ Tabla notifications verificada');
+        console.log('✅ [DB] Tabla notifications verificada');
 
         await db.query(`CREATE TABLE IF NOT EXISTS pending_profile_changes (
             id INT PRIMARY KEY AUTO_INCREMENT,
@@ -235,7 +237,7 @@ async function inicializarBaseDatos() {
             INDEX idx_userId (userId),
             INDEX idx_status (status)
         )`);
-        console.log('✅ Tabla pending_profile_changes verificada');
+        console.log('✅ [DB] Tabla pending_profile_changes verificada');
 
         await db.query(`CREATE TABLE IF NOT EXISTS reviews (
             id INT PRIMARY KEY AUTO_INCREMENT,
@@ -258,7 +260,7 @@ async function inicializarBaseDatos() {
             INDEX idx_userId (userId),
             INDEX idx_rating (rating)
         )`);
-        console.log('✅ Tabla reviews verificada');
+        console.log('✅ [DB] Tabla reviews verificada');
 
         await db.query(`CREATE TABLE IF NOT EXISTS review_replies (
             id INT PRIMARY KEY AUTO_INCREMENT,
@@ -271,7 +273,7 @@ async function inicializarBaseDatos() {
             FOREIGN KEY (userId) REFERENCES users(id) ON DELETE CASCADE,
             INDEX idx_reviewId (reviewId)
         )`);
-        console.log('✅ Tabla review_replies verificada');
+        console.log('✅ [DB] Tabla review_replies verificada');
 
         await db.query(`CREATE TABLE IF NOT EXISTS review_likes (
             id INT PRIMARY KEY AUTO_INCREMENT,
@@ -282,7 +284,7 @@ async function inicializarBaseDatos() {
             FOREIGN KEY (userId) REFERENCES users(id) ON DELETE CASCADE,
             UNIQUE KEY unique_like (reviewId, userId)
         )`);
-        console.log('✅ Tabla review_likes verificada');
+        console.log('✅ [DB] Tabla review_likes verificada');
 
         await db.query(`CREATE TABLE IF NOT EXISTS chats (
             id INT PRIMARY KEY AUTO_INCREMENT,
@@ -306,7 +308,7 @@ async function inicializarBaseDatos() {
             INDEX idx_sellerId (sellerId),
             UNIQUE KEY unique_chat (orderId, productId)
         )`);
-        console.log('✅ Tabla chats verificada');
+        console.log('✅ [DB] Tabla chats verificada');
 
         await db.query(`CREATE TABLE IF NOT EXISTS messages (
             id INT PRIMARY KEY AUTO_INCREMENT,
@@ -325,7 +327,7 @@ async function inicializarBaseDatos() {
             INDEX idx_chatId (chatId),
             INDEX idx_createdAt (createdAt)
         )`);
-        console.log('✅ Tabla messages verificada');
+        console.log('✅ [DB] Tabla messages verificada');
 
         await db.query(`CREATE TABLE IF NOT EXISTS tracking_sessions (
             id INT PRIMARY KEY AUTO_INCREMENT,
@@ -348,7 +350,7 @@ async function inicializarBaseDatos() {
             INDEX idx_orderId (orderId),
             INDEX idx_status (status)
         )`);
-        console.log('✅ Tabla tracking_sessions verificada');
+        console.log('✅ [DB] Tabla tracking_sessions verificada');
 
         await db.query(`CREATE TABLE IF NOT EXISTS tracking_locations (
             id INT PRIMARY KEY AUTO_INCREMENT,
@@ -363,7 +365,7 @@ async function inicializarBaseDatos() {
             INDEX idx_orderId (orderId),
             INDEX idx_createdAt (createdAt)
         )`);
-        console.log('✅ Tabla tracking_locations verificada');
+        console.log('✅ [DB] Tabla tracking_locations verificada');
 
         await db.query(`CREATE TABLE IF NOT EXISTS reports (
             id INT PRIMARY KEY AUTO_INCREMENT,
@@ -382,7 +384,7 @@ async function inicializarBaseDatos() {
             INDEX idx_status (status),
             INDEX idx_reportedUser (reportedUserId)
         )`);
-        console.log('✅ Tabla reports verificada');
+        console.log('✅ [DB] Tabla reports verificada');
 
         await db.query(`CREATE TABLE IF NOT EXISTS product_reports (
             id INT PRIMARY KEY AUTO_INCREMENT,
@@ -402,7 +404,7 @@ async function inicializarBaseDatos() {
             INDEX idx_status (status),
             INDEX idx_productId (productId)
         )`);
-        console.log('✅ Tabla product_reports verificada');
+        console.log('✅ [DB] Tabla product_reports verificada');
 
         // ============ CREAR ADMINISTRADOR POR DEFECTO ============
         const [admins] = await db.query('SELECT id FROM users WHERE role = "Administrador" LIMIT 1');
@@ -411,12 +413,12 @@ async function inicializarBaseDatos() {
             const hashedPassword = await bcrypt.hash('Admin123*', 10);
             await db.query(`INSERT INTO users (role, numeroControl, nombreCompleto, email, password, codigoAcceso, isActive, createdAt)
                 VALUES ('Administrador', 'ADMIN001', 'Administrador ByteSnack', 'admin@bytesnack.com', ?, 'Admin123*', TRUE, NOW())`, [hashedPassword]);
-            console.log('✅ Usuario administrador creado (ADMIN001 / Admin123*)');
+            console.log('✅ [DB] Usuario administrador creado (ADMIN001 / Admin123*)');
         }
 
-        console.log('📦 Base de datos inicializada correctamente');
+        console.log('✅ [DB] Base de datos inicializada correctamente');
     } catch (error) {
-        console.error('❌ Error inicializando BD:', error.message);
+        console.error('❌ [DB] Error inicializando BD:', error.message);
     }
 }
 
@@ -454,7 +456,7 @@ app.use('/api/reviews', reviewsRouter);
 app.use('/api/chat', chatRouter);
 app.use('/api/reports', reportsRouter);
 
-// ✅ PASO 8: TRACKING CON WEBSOCKET - CORREGIDO
+// ============ TRACKING CON WEBSOCKET ============
 const TrackingService = require('./services/trackingService');
 const trackingRouter = require('./routes/tracking');
 
@@ -463,7 +465,7 @@ const trackingService = new TrackingService(server);
 const trackingRoutes = trackingRouter(db, trackingService);
 app.use('/api/tracking', trackingRoutes);
 
-console.log('🚀 TrackingService inicializado con WebSocket en /ws/tracking');
+console.log('🚀 [Server] TrackingService inicializado con WebSocket en /ws/tracking');
 
 // Manejador de rutas no encontradas
 app.use('*', (req, res) => {
@@ -476,8 +478,9 @@ app.use('*', (req, res) => {
 // ============ INICIAR SERVIDOR ============
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-    console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
-    console.log(`📡 API disponible en: http://localhost:${PORT}/api`);
-    console.log(`🔌 WebSocket disponible en: ws://localhost:${PORT}/ws/tracking`);
-    console.log(`❤️ Health check: http://localhost:${PORT}/api/health`);
+    console.log(`🚀 [Server] Servidor corriendo en puerto ${PORT}`);
+    console.log(`📡 [Server] API disponible en: http://localhost:${PORT}/api`);
+    console.log(`🔌 [Server] WebSocket disponible en: ws://localhost:${PORT}/ws/tracking`);
+    console.log(`❤️ [Server] Health check: http://localhost:${PORT}/api/health`);
+    console.log(`✅ [Server] Servidor listo para recibir conexiones`);
 });

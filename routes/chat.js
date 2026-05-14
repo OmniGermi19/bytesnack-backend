@@ -9,12 +9,13 @@ module.exports = (db) => {
     router.post('/init', authenticateToken, async (req, res) => {
         const { orderId, productId, productName, sellerId, sellerName, buyerName } = req.body;
 
+        console.log(`💬 [Chat] Iniciando chat para pedido ${orderId}, producto ${productId}`);
+
         if (!orderId || !productId || !sellerId) {
             return res.status(400).json({ message: 'Faltan campos requeridos' });
         }
 
         try {
-            // Verificar que el usuario es parte del chat
             const isBuyer = req.userId.toString() === buyerId?.toString();
             const isSeller = req.userId.toString() === sellerId.toString();
 
@@ -22,7 +23,6 @@ module.exports = (db) => {
                 return res.status(403).json({ message: 'No tienes permiso' });
             }
 
-            // Buscar o crear chat
             let [chats] = await db.query(
                 `SELECT * FROM chats WHERE orderId = ? AND productId = ?`,
                 [orderId, productId]
@@ -36,17 +36,17 @@ module.exports = (db) => {
                     [orderId, productId, productName, buyerId || req.userId, sellerId]
                 );
                 chatId = result.insertId;
+                console.log(`✅ [Chat] Chat creado con ID ${chatId}`);
             } else {
                 chatId = chats[0].id;
+                console.log(`✅ [Chat] Chat existente ID ${chatId}`);
             }
 
-            // Obtener mensajes
             const [messages] = await db.query(
                 `SELECT * FROM messages WHERE chatId = ? ORDER BY createdAt ASC`,
                 [chatId]
             );
 
-            // Marcar mensajes como leídos si el usuario es el receptor
             const [chatInfo] = await db.query(`SELECT buyerId, sellerId FROM chats WHERE id = ?`, [chatId]);
             if (chatInfo.length > 0) {
                 const isBuyerUser = chatInfo[0].buyerId === req.userId;
@@ -74,7 +74,7 @@ module.exports = (db) => {
             });
 
         } catch (error) {
-            console.error('Error iniciando chat:', error);
+            console.error('❌ Error iniciando chat:', error);
             res.status(500).json({ message: 'Error al iniciar chat' });
         }
     });
@@ -83,12 +83,13 @@ module.exports = (db) => {
     router.post('/send', authenticateToken, async (req, res) => {
         const { chatId, message, type, imageUrl } = req.body;
 
+        console.log(`💬 [Chat] Enviando mensaje al chat ${chatId} de usuario ${req.userId}`);
+
         if (!chatId || !message) {
             return res.status(400).json({ message: 'Faltan campos requeridos' });
         }
 
         try {
-            // Verificar que el usuario pertenece al chat
             const [chat] = await db.query(
                 `SELECT c.*, u.nombreCompleto, u.role 
                  FROM chats c
@@ -105,14 +106,12 @@ module.exports = (db) => {
             const senderRole = chatData.role;
             const senderName = chatData.nombreCompleto;
 
-            // Insertar mensaje
             const [result] = await db.query(
                 `INSERT INTO messages (chatId, senderId, senderName, senderRole, message, type, imageUrl, createdAt)
                  VALUES (?, ?, ?, ?, ?, ?, ?, NOW())`,
                 [chatId, req.userId, senderName, senderRole, message, type || 'text', imageUrl || null]
             );
 
-            // Actualizar último mensaje y contadores
             const isBuyer = chatData.buyerId === req.userId;
             if (isBuyer) {
                 await db.query(
@@ -126,6 +125,7 @@ module.exports = (db) => {
                 );
             }
 
+            console.log(`✅ [Chat] Mensaje enviado (ID: ${result.insertId})`);
             res.status(201).json({
                 success: true,
                 messageId: result.insertId,
@@ -133,7 +133,7 @@ module.exports = (db) => {
             });
 
         } catch (error) {
-            console.error('Error enviando mensaje:', error);
+            console.error('❌ Error enviando mensaje:', error);
             res.status(500).json({ message: 'Error al enviar mensaje' });
         }
     });
@@ -141,6 +141,8 @@ module.exports = (db) => {
     // GET /api/chat/conversations - Obtener conversaciones del usuario
     router.get('/conversations', authenticateToken, async (req, res) => {
         try {
+            console.log(`💬 [Chat] Obteniendo conversaciones de usuario ${req.userId}`);
+
             const [conversations] = await db.query(
                 `SELECT c.*, 
                     p.name as productName, p.images as productImage,
@@ -155,7 +157,6 @@ module.exports = (db) => {
                 [req.userId, req.userId]
             );
 
-            // Parsear imágenes de productos
             for (const conv of conversations) {
                 if (conv.productImage) {
                     try {
@@ -166,7 +167,6 @@ module.exports = (db) => {
                     }
                 }
                 
-                // Determinar contador de no leídos
                 const isBuyer = conv.buyerId === req.userId;
                 conv.unreadCount = isBuyer ? conv.buyerUnreadCount : conv.sellerUnreadCount;
                 conv.otherUserName = isBuyer ? conv.sellerName : conv.buyerName;
@@ -174,10 +174,11 @@ module.exports = (db) => {
                 conv.otherUserId = isBuyer ? conv.sellerId : conv.buyerId;
             }
 
+            console.log(`✅ [Chat] ${conversations.length} conversaciones encontradas`);
             res.json(conversations);
 
         } catch (error) {
-            console.error('Error obteniendo conversaciones:', error);
+            console.error('❌ Error obteniendo conversaciones:', error);
             res.status(500).json({ message: 'Error al obtener conversaciones' });
         }
     });
@@ -186,8 +187,9 @@ module.exports = (db) => {
     router.get('/:chatId/messages', authenticateToken, async (req, res) => {
         const { chatId } = req.params;
 
+        console.log(`💬 [Chat] Obteniendo mensajes del chat ${chatId} para usuario ${req.userId}`);
+
         try {
-            // Verificar permiso
             const [chat] = await db.query(
                 `SELECT * FROM chats WHERE id = ? AND (buyerId = ? OR sellerId = ?)`,
                 [chatId, req.userId, req.userId]
@@ -202,7 +204,6 @@ module.exports = (db) => {
                 [chatId]
             );
 
-            // Marcar como leídos
             const isBuyer = chat[0].buyerId === req.userId;
             if (isBuyer) {
                 await db.query(`UPDATE chats SET buyerUnreadCount = 0 WHERE id = ?`, [chatId]);
@@ -216,10 +217,11 @@ module.exports = (db) => {
                 [chatId, req.userId]
             );
 
+            console.log(`✅ [Chat] ${messages.length} mensajes obtenidos`);
             res.json(messages);
 
         } catch (error) {
-            console.error('Error obteniendo mensajes:', error);
+            console.error('❌ Error obteniendo mensajes:', error);
             res.status(500).json({ message: 'Error al obtener mensajes' });
         }
     });
@@ -227,6 +229,8 @@ module.exports = (db) => {
     // POST /api/chat/:chatId/read - Marcar como leído
     router.post('/:chatId/read', authenticateToken, async (req, res) => {
         const { chatId } = req.params;
+
+        console.log(`💬 [Chat] Marcando chat ${chatId} como leído para usuario ${req.userId}`);
 
         try {
             const [chat] = await db.query(
@@ -249,10 +253,11 @@ module.exports = (db) => {
                 [chatId, req.userId]
             );
 
+            console.log(`✅ [Chat] Marcado como leído`);
             res.json({ success: true });
 
         } catch (error) {
-            console.error('Error marcando como leído:', error);
+            console.error('❌ Error marcando como leído:', error);
             res.status(500).json({ message: 'Error al marcar como leído' });
         }
     });
@@ -270,10 +275,11 @@ module.exports = (db) => {
             );
 
             const totalUnread = (result[0]?.buyerUnread || 0) + (result[0]?.sellerUnread || 0);
+            console.log(`💬 [Chat] Usuario ${req.userId} tiene ${totalUnread} mensajes no leídos`);
             res.json({ totalUnread });
 
         } catch (error) {
-            console.error('Error obteniendo contador:', error);
+            console.error('❌ Error obteniendo contador:', error);
             res.status(500).json({ message: 'Error al obtener contador' });
         }
     });

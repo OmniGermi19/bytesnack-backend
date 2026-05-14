@@ -6,12 +6,16 @@ const mysql = require('mysql2/promise');
 class TrackingService {
     constructor(server) {
         this.wss = new WebSocket.Server({ server, path: '/ws/tracking' });
-        this.clients = new Map(); // orderId -> Set of clients (WebSocket connections)
+        this.clients = new Map(); // orderId -> Set of clients
         this.sellerSessions = new Map(); // orderId -> seller WebSocket
-        this.userSessions = new Map(); // userId -> WebSocket (para enviar notificaciones)
+        this.userSessions = new Map(); // userId -> WebSocket
+        this.locationHistory = new Map(); // orderId -> last 10 locations
+        this.heartbeatInterval = null;
         this.db = null;
         this._initialize();
         this._connectDatabase();
+        this._startHeartbeat();
+        console.log('🚀 [TrackingService] Servicio de tracking inicializado');
     }
 
     async _connectDatabase() {
@@ -33,13 +37,24 @@ class TrackingService {
         }
     }
 
+    _startHeartbeat() {
+        this.heartbeatInterval = setInterval(() => {
+            for (const [userId, ws] of this.userSessions) {
+                if (ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({ type: 'ping', timestamp: new Date().toISOString() }));
+                }
+            }
+        }, 30000);
+        console.log('💓 [TrackingService] Heartbeat iniciado (intervalo: 30s)');
+    }
+
     _initialize() {
         this.wss.on('connection', (ws, req) => {
             let userId = null;
             let userRole = null;
             let currentOrderId = null;
+            let lastPongReceived = Date.now();
 
-            // Obtener token de la URL
             const url = new URL(req.url, `http://${req.headers.host}`);
             const token = url.searchParams.get('token');
 
@@ -60,20 +75,24 @@ class TrackingService {
                 return;
             }
 
-            // Registrar usuario
+            ws.on('pong', () => {
+                lastPongReceived = Date.now();
+            });
+
             this.userSessions.set(userId, ws);
 
             ws.on('message', async (data) => {
                 try {
                     const message = JSON.parse(data.toString());
-                    console.log(`📨 [TrackingService] Mensaje de ${userId}: ${message.type}`);
-
+                    
                     switch (message.type) {
+                        case 'pong':
+                            break;
+
                         case 'start_tracking':
-                            // Vendedor inicia seguimiento
                             currentOrderId = message.orderId;
+                            console.log(`📍 [TrackingService] Iniciando tracking: orderId=${currentOrderId}, userId=${userId}`);
                             
-                            // Verificar que el usuario es el vendedor de este pedido
                             const isSeller = await this._verifySeller(userId, currentOrderId);
                             if (!isSeller && userRole !== 'Administrador') {
                                 ws.send(JSON.stringify({
@@ -83,7 +102,6 @@ class TrackingService {
                                 return;
                             }
 
-                            // Guardar sesión del vendedor
                             this.sellerSessions.set(currentOrderId, ws);
                             
                             if (!this.clients.has(currentOrderId)) {
@@ -91,16 +109,17 @@ class TrackingService {
                             }
                             this.clients.get(currentOrderId).add(ws);
 
-                            // Actualizar estado en BD
                             await this._updateTrackingStatus(currentOrderId, 'active', userId);
-
+                            
+                            const orderInfo = await this._getOrderInfo(currentOrderId);
+                            
                             ws.send(JSON.stringify({
                                 type: 'tracking_started',
                                 orderId: currentOrderId,
-                                message: 'Seguimiento iniciado correctamente'
+                                message: 'Seguimiento iniciado correctamente',
+                                buyerInfo: orderInfo?.buyerInfo
                             }));
 
-                            // Notificar a los compradores que el tracking ha comenzado
                             await this._notifyOrderParticipants(currentOrderId, {
                                 type: 'tracking_started',
                                 orderId: currentOrderId,
@@ -109,22 +128,32 @@ class TrackingService {
                             break;
 
                         case 'join_tracking':
-                            // Comprador se une al seguimiento
                             currentOrderId = message.orderId;
+                            console.log(`📍 [TrackingService] Uniendo a tracking: orderId=${currentOrderId}, userId=${userId}`);
                             
                             if (!this.clients.has(currentOrderId)) {
                                 this.clients.set(currentOrderId, new Set());
                             }
                             this.clients.get(currentOrderId).add(ws);
 
-                            // Enviar ubicación actual del vendedor si existe
                             const sellerWs = this.sellerSessions.get(currentOrderId);
                             if (sellerWs && sellerWs.lastLocation) {
                                 ws.send(JSON.stringify({
                                     type: 'location_update',
                                     orderId: currentOrderId,
                                     ...sellerWs.lastLocation,
-                                    sellerName: sellerWs.sellerName
+                                    sellerName: sellerWs.sellerName,
+                                    isHistorical: false
+                                }));
+                            }
+
+                            const history = this.locationHistory.get(currentOrderId) || [];
+                            if (history.length > 0) {
+                                ws.send(JSON.stringify({
+                                    type: 'location_history',
+                                    orderId: currentOrderId,
+                                    locations: history.slice(-5),
+                                    sellerName: sellerWs?.sellerName
                                 }));
                             }
 
@@ -136,43 +165,47 @@ class TrackingService {
                             break;
 
                         case 'update_location':
-                            // Vendedor actualiza ubicación
                             if (currentOrderId && this.sellerSessions.get(currentOrderId) === ws) {
-                                // Guardar última ubicación en el objeto ws
-                                ws.lastLocation = {
-                                    lat: message.lat,
-                                    lng: message.lng,
-                                    address: message.address,
-                                    speed: message.speed,
-                                    accuracy: message.accuracy,
-                                    lastUpdate: new Date().toISOString(),
-                                    sellerName: message.sellerName
-                                };
-                                ws.sellerName = message.sellerName;
-
-                                // Transmitir a todos los clientes del pedido (excepto el vendedor)
-                                this._broadcastToOrder(currentOrderId, {
-                                    type: 'location_update',
-                                    orderId: currentOrderId,
-                                    lat: message.lat,
-                                    lng: message.lng,
-                                    address: message.address,
-                                    speed: message.speed,
-                                    accuracy: message.accuracy,
-                                    sellerName: message.sellerName,
-                                    lastUpdate: new Date().toISOString()
-                                }, [ws]);
-
-                                // Guardar en BD (opcional, para historial)
-                                await this._saveLocationHistory(currentOrderId, message);
+                                if (this._isValidLocation(message.lat, message.lng)) {
+                                    const locationData = {
+                                        lat: message.lat,
+                                        lng: message.lng,
+                                        address: message.address || await this._getAddressFromCoords(message.lat, message.lng),
+                                        speed: message.speed || 0,
+                                        accuracy: message.accuracy || 0,
+                                        lastUpdate: new Date().toISOString(),
+                                        sellerName: message.sellerName
+                                    };
+                                    
+                                    ws.lastLocation = locationData;
+                                    ws.sellerName = message.sellerName;
+                                    
+                                    if (!this.locationHistory.has(currentOrderId)) {
+                                        this.locationHistory.set(currentOrderId, []);
+                                    }
+                                    const historyList = this.locationHistory.get(currentOrderId);
+                                    historyList.push(locationData);
+                                    if (historyList.length > 10) historyList.shift();
+                                    
+                                    this._broadcastToOrder(currentOrderId, {
+                                        type: 'location_update',
+                                        orderId: currentOrderId,
+                                        ...locationData,
+                                        isHistorical: false
+                                    }, [ws]);
+                                    
+                                    await this._saveLocationHistory(currentOrderId, locationData);
+                                    console.log(`📍 [TrackingService] Ubicación actualizada para orderId=${currentOrderId}`);
+                                }
                             }
                             break;
 
                         case 'stop_tracking':
-                            // Vendedor detiene seguimiento
                             if (currentOrderId) {
+                                console.log(`📍 [TrackingService] Deteniendo tracking: orderId=${currentOrderId}, userId=${userId}`);
                                 this.sellerSessions.delete(currentOrderId);
                                 await this._updateTrackingStatus(currentOrderId, 'ended', userId);
+                                this.locationHistory.delete(currentOrderId);
                                 
                                 this._broadcastToOrder(currentOrderId, {
                                     type: 'tracking_ended',
@@ -187,26 +220,17 @@ class TrackingService {
                             }
                             break;
 
-                        case 'ping':
-                            ws.send(JSON.stringify({ type: 'pong', timestamp: new Date().toISOString() }));
-                            break;
-
                         default:
                             console.log(`⚠️ [TrackingService] Tipo de mensaje desconocido: ${message.type}`);
                     }
                 } catch (error) {
-                    console.error('❌ [TrackingService] Error procesando mensaje:', error);
-                    ws.send(JSON.stringify({
-                        type: 'error',
-                        message: 'Error interno del servidor'
-                    }));
+                    console.error('❌ Error procesando mensaje:', error);
                 }
             });
 
             ws.on('close', () => {
-                console.log(`🔌 [TrackingService] Cliente desconectado: userId=${userId}, orderId=${currentOrderId}`);
+                console.log(`🔌 [TrackingService] Cliente desconectado: userId=${userId}, orderId=${currentOrderId || 'ninguno'}`);
                 
-                // Limpiar sesiones
                 if (currentOrderId) {
                     if (this.sellerSessions.get(currentOrderId) === ws) {
                         this.sellerSessions.delete(currentOrderId);
@@ -232,6 +256,21 @@ class TrackingService {
         console.log('🚀 [TrackingService] WebSocket server inicializado en /ws/tracking');
     }
 
+    _isValidLocation(lat, lng) {
+        return lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180;
+    }
+
+    async _getAddressFromCoords(lat, lng) {
+        try {
+            const response = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1`);
+            const data = await response.json();
+            return data.display_name || `${lat.toFixed(6)}, ${lng.toFixed(6)}`;
+        } catch (error) {
+            console.log(`⚠️ [TrackingService] Error obteniendo dirección: ${error.message}`);
+            return `${lat.toFixed(6)}, ${lng.toFixed(6)}`;
+        }
+    }
+
     async _verifySeller(userId, orderId) {
         try {
             if (!this.db) return false;
@@ -245,8 +284,25 @@ class TrackingService {
             );
             return rows.length > 0;
         } catch (error) {
-            console.error('❌ [TrackingService] Error verificando vendedor:', error);
+            console.error('❌ Error verificando vendedor:', error);
             return false;
+        }
+    }
+
+    async _getOrderInfo(orderId) {
+        try {
+            if (!this.db) return null;
+            const [rows] = await this.db.execute(
+                `SELECT o.userId as buyerId, u.nombreCompleto as buyerName, u.numeroControl as buyerControl
+                 FROM orders o
+                 JOIN users u ON o.userId = u.id
+                 WHERE o.id = ?`,
+                [orderId]
+            );
+            return rows[0] || null;
+        } catch (error) {
+            console.error('❌ Error obteniendo info del pedido:', error);
+            return null;
         }
     }
 
@@ -261,7 +317,7 @@ class TrackingService {
             );
             console.log(`📝 [TrackingService] Tracking ${status} para orderId=${orderId}`);
         } catch (error) {
-            console.error('❌ [TrackingService] Error actualizando tracking:', error);
+            console.error('❌ Error actualizando tracking:', error);
         }
     }
 
@@ -271,10 +327,10 @@ class TrackingService {
             await this.db.execute(
                 `INSERT INTO tracking_locations (orderId, lat, lng, address, speed, accuracy, createdAt)
                  VALUES (?, ?, ?, ?, ?, ?, NOW())`,
-                [orderId, location.lat, location.lng, location.address || null, location.speed || null, location.accuracy || null]
+                [orderId, location.lat, location.lng, location.address, location.speed, location.accuracy]
             );
         } catch (error) {
-            console.error('❌ [TrackingService] Error guardando ubicación:', error);
+            console.error('❌ Error guardando ubicación:', error);
         }
     }
 
@@ -282,7 +338,6 @@ class TrackingService {
         try {
             if (!this.db) return;
             
-            // Obtener participantes del pedido
             const [participants] = await this.db.execute(
                 `SELECT o.userId as buyerId, p.sellerId
                  FROM orders o
@@ -294,20 +349,13 @@ class TrackingService {
             );
             
             if (participants.length > 0) {
-                // Notificar al comprador
                 const buyerWs = this.userSessions.get(participants[0].buyerId);
                 if (buyerWs && buyerWs.readyState === WebSocket.OPEN) {
                     buyerWs.send(JSON.stringify(message));
                 }
-                
-                // Notificar al vendedor
-                const sellerWs = this.userSessions.get(participants[0].sellerId);
-                if (sellerWs && sellerWs !== this.sellerSessions.get(orderId) && sellerWs.readyState === WebSocket.OPEN) {
-                    sellerWs.send(JSON.stringify(message));
-                }
             }
         } catch (error) {
-            console.error('❌ [TrackingService] Error notificando participantes:', error);
+            console.error('❌ Error notificando participantes:', error);
         }
     }
 
@@ -323,7 +371,16 @@ class TrackingService {
         });
     }
 
-    // Método público para enviar notificaciones desde otros servicios
+    setSellerName(orderId, sellerName) {
+        const sellerWs = this.sellerSessions.get(orderId);
+        if (sellerWs && sellerWs.readyState === WebSocket.OPEN) {
+            sellerWs.send(JSON.stringify({
+                type: 'seller_name_updated',
+                sellerName: sellerName
+            }));
+        }
+    }
+
     sendNotification(userId, message) {
         const ws = this.userSessions.get(userId);
         if (ws && ws.readyState === WebSocket.OPEN) {
@@ -333,18 +390,24 @@ class TrackingService {
         return false;
     }
 
-    // Método público para obtener estado de tracking
     isTrackingActive(orderId) {
         return this.sellerSessions.has(orderId);
     }
 
-    // Método público para obtener ubicación actual del vendedor
     getSellerLocation(orderId) {
         const sellerWs = this.sellerSessions.get(orderId);
         if (sellerWs && sellerWs.lastLocation) {
             return sellerWs.lastLocation;
         }
         return null;
+    }
+
+    stopHeartbeat() {
+        if (this.heartbeatInterval) {
+            clearInterval(this.heartbeatInterval);
+            this.heartbeatInterval = null;
+            console.log('💓 [TrackingService] Heartbeat detenido');
+        }
     }
 }
 

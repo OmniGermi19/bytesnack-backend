@@ -8,6 +8,8 @@ module.exports = (db) => {
     router.post('/user', authenticateToken, async (req, res) => {
         const { reportedUserId, reason, description } = req.body;
 
+        console.log(`📢 [Reports] Reporte de usuario: ${req.userId} reporta a ${reportedUserId} - Motivo: ${reason}`);
+
         if (!reportedUserId || !reason) {
             return res.status(400).json({ message: 'Faltan campos requeridos' });
         }
@@ -48,9 +50,10 @@ module.exports = (db) => {
                 );
             }
 
+            console.log(`✅ [Reports] Reporte de usuario enviado correctamente`);
             res.status(201).json({ success: true, message: 'Reporte enviado correctamente' });
         } catch (error) {
-            console.error('Error reportando usuario:', error);
+            console.error('❌ Error reportando usuario:', error);
             res.status(500).json({ message: 'Error al enviar reporte' });
         }
     });
@@ -58,6 +61,8 @@ module.exports = (db) => {
     // ========== REPORTAR PRODUCTO ==========
     router.post('/product', authenticateToken, async (req, res) => {
         const { productId, productName, reason, description } = req.body;
+
+        console.log(`📢 [Reports] Reporte de producto: ${req.userId} reporta "${productName}" - Motivo: ${reason}`);
 
         if (!productId || !reason) {
             return res.status(400).json({ message: 'Faltan campos requeridos' });
@@ -95,9 +100,10 @@ module.exports = (db) => {
                 );
             }
 
+            console.log(`✅ [Reports] Reporte de producto enviado correctamente`);
             res.status(201).json({ success: true, message: 'Producto reportado correctamente' });
         } catch (error) {
-            console.error('Error reportando producto:', error);
+            console.error('❌ Error reportando producto:', error);
             res.status(500).json({ message: 'Error al reportar producto' });
         }
     });
@@ -105,6 +111,9 @@ module.exports = (db) => {
     // ========== OBTENER REPORTES (ADMIN) ==========
     router.get('/users', authenticateToken, isAdmin, async (req, res) => {
         const { status = 'pending' } = req.query;
+        
+        console.log(`📢 [Reports] Obteniendo reportes de usuarios - estado: ${status}`);
+        
         try {
             const [reports] = await db.query(
                 `SELECT r.*, 
@@ -119,15 +128,20 @@ module.exports = (db) => {
                  ORDER BY r.createdAt DESC`,
                 [status]
             );
+            
+            console.log(`✅ [Reports] ${reports.length} reportes de usuarios encontrados`);
             res.json(reports);
         } catch (error) {
-            console.error('Error obteniendo reportes:', error);
+            console.error('❌ Error obteniendo reportes:', error);
             res.status(500).json({ message: 'Error al obtener reportes' });
         }
     });
 
     router.get('/products', authenticateToken, isAdmin, async (req, res) => {
         const { status = 'pending' } = req.query;
+        
+        console.log(`📢 [Reports] Obteniendo reportes de productos - estado: ${status}`);
+        
         try {
             const [reports] = await db.query(
                 `SELECT pr.*, 
@@ -140,9 +154,11 @@ module.exports = (db) => {
                  ORDER BY pr.createdAt DESC`,
                 [status]
             );
+            
+            console.log(`✅ [Reports] ${reports.length} reportes de productos encontrados`);
             res.json(reports);
         } catch (error) {
-            console.error('Error obteniendo reportes de productos:', error);
+            console.error('❌ Error obteniendo reportes de productos:', error);
             res.status(500).json({ message: 'Error al obtener reportes' });
         }
     });
@@ -151,6 +167,8 @@ module.exports = (db) => {
     router.post('/users/:reportId/review', authenticateToken, isAdmin, async (req, res) => {
         const { reportId } = req.params;
         const { action, adminNotes, banReason } = req.body;
+
+        console.log(`📢 [Reports] Revisando reporte de usuario ${reportId} - Acción: ${action}`);
 
         try {
             const [report] = await db.query('SELECT * FROM reports WHERE id = ?', [reportId]);
@@ -183,6 +201,7 @@ module.exports = (db) => {
                      '❌ Cuenta suspendida',
                      `Tu cuenta ha sido suspendida por: ${banReason || 'Comportamiento inapropiado'}. Contacta al administrador.`]
                 );
+                console.log(`✅ [Reports] Usuario ${reportedUserId} suspendido`);
             } else if (action === 'warn') {
                 await db.query(
                     `INSERT INTO notifications (userId, title, body, type, isRead, createdAt)
@@ -191,11 +210,14 @@ module.exports = (db) => {
                      '⚠️ Advertencia',
                      `Has recibido una advertencia por: ${adminNotes || 'Comportamiento inapropiado'}. Revisa nuestras políticas.`]
                 );
+                console.log(`✅ [Reports] Usuario ${reportedUserId} advertido`);
+            } else {
+                console.log(`✅ [Reports] Reporte ${reportId} desestimado`);
             }
 
             res.json({ success: true, message: 'Reporte revisado' });
         } catch (error) {
-            console.error('Error revisando reporte:', error);
+            console.error('❌ Error revisando reporte:', error);
             res.status(500).json({ message: 'Error al revisar reporte' });
         }
     });
@@ -203,6 +225,8 @@ module.exports = (db) => {
     router.post('/products/:reportId/review', authenticateToken, isAdmin, async (req, res) => {
         const { reportId } = req.params;
         const { action, adminNotes } = req.body;
+
+        console.log(`📢 [Reports] Revisando reporte de producto ${reportId} - Acción: ${action}`);
 
         try {
             const [report] = await db.query('SELECT * FROM product_reports WHERE id = ?', [reportId]);
@@ -240,6 +264,8 @@ module.exports = (db) => {
                      WHERE id = ?`,
                     [req.userId, adminNotes || null, reportId]
                 );
+                
+                console.log(`✅ [Reports] Producto ${productId} (${productName}) ocultado`);
             } else if (action === 'dismiss') {
                 await db.query(
                     `UPDATE product_reports 
@@ -247,11 +273,12 @@ module.exports = (db) => {
                      WHERE id = ?`,
                     [req.userId, adminNotes || null, reportId]
                 );
+                console.log(`✅ [Reports] Reporte de producto ${reportId} desestimado`);
             }
 
             res.json({ success: true, message: 'Reporte revisado' });
         } catch (error) {
-            console.error('Error revisando reporte de producto:', error);
+            console.error('❌ Error revisando reporte de producto:', error);
             res.status(500).json({ message: 'Error al revisar reporte' });
         }
     });
@@ -260,6 +287,8 @@ module.exports = (db) => {
     router.delete('/user/:userId/permanent', authenticateToken, isAdmin, async (req, res) => {
         const { userId } = req.params;
         const { reason } = req.body;
+
+        console.log(`🗑️ [Reports] Eliminando permanentemente usuario ${userId} - Motivo: ${reason || 'No especificado'}`);
 
         try {
             const [user] = await db.query(
@@ -276,10 +305,10 @@ module.exports = (db) => {
                 [reason || 'Eliminado por administrador', userId]
             );
 
-            console.log(`🗑️ Usuario ${user[0].numeroControl} (${user[0].nombreCompleto}) eliminado permanentemente por admin ${req.userId}`);
+            console.log(`✅ [Reports] Usuario ${user[0].numeroControl} (${user[0].nombreCompleto}) eliminado permanentemente`);
             res.json({ success: true, message: 'Usuario eliminado permanentemente' });
         } catch (error) {
-            console.error('Error eliminando usuario:', error);
+            console.error('❌ Error eliminando usuario:', error);
             res.status(500).json({ message: 'Error al eliminar usuario' });
         }
     });
@@ -287,6 +316,8 @@ module.exports = (db) => {
     // ========== RESTAURAR USUARIO BANEADO (ADMIN) ==========
     router.post('/user/:userId/restore', authenticateToken, isAdmin, async (req, res) => {
         const { userId } = req.params;
+
+        console.log(`🔄 [Reports] Restaurando usuario baneado ${userId}`);
 
         try {
             await db.query(
@@ -304,9 +335,10 @@ module.exports = (db) => {
                  'Tu cuenta ha sido restaurada. Por favor sigue las políticas de la plataforma.']
             );
 
+            console.log(`✅ [Reports] Usuario ${userId} restaurado`);
             res.json({ success: true, message: 'Usuario restaurado' });
         } catch (error) {
-            console.error('Error restaurando usuario:', error);
+            console.error('❌ Error restaurando usuario:', error);
             res.status(500).json({ message: 'Error al restaurar usuario' });
         }
     });

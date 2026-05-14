@@ -6,6 +6,8 @@ module.exports = (db) => {
 
     // GET /api/sales - Ventas del vendedor
     router.get('/', authenticateToken, isSeller, async (req, res) => {
+        console.log(`💰 [Sales] Obteniendo ventas del vendedor ${req.userId}`);
+
         try {
             const [sales] = await db.query(
                 `SELECT o.*, oi.productName, oi.quantity, oi.price, oi.imageUrl, u.nombreCompleto as buyerName, u.numeroControl as buyerControl
@@ -22,6 +24,7 @@ module.exports = (db) => {
             const totalOrders = [...new Set(sales.map(s => s.id))].length;
             const totalItems = sales.reduce((sum, s) => sum + s.quantity, 0);
             
+            console.log(`✅ [Sales] ${totalOrders} pedidos, $${totalSales.toFixed(2)} en ventas, ${totalItems} items vendidos`);
             res.json({ 
                 sales, 
                 totalSales, 
@@ -30,13 +33,15 @@ module.exports = (db) => {
                 averageTicket: totalOrders > 0 ? totalSales / totalOrders : 0
             });
         } catch (error) {
-            console.error('Error obteniendo ventas:', error);
+            console.error('❌ Error obteniendo ventas:', error);
             res.status(500).json({ message: 'Error al obtener ventas' });
         }
     });
 
     // GET /api/sales/stats - Estadísticas de ventas
     router.get('/stats', authenticateToken, isSeller, async (req, res) => {
+        console.log(`💰 [Sales] Obteniendo estadísticas de ventas del vendedor ${req.userId}`);
+
         try {
             const [stats] = await db.query(
                 `SELECT DATE(o.createdAt) as date, 
@@ -52,9 +57,11 @@ module.exports = (db) => {
                  LIMIT 30`,
                 [req.userId]
             );
+            
+            console.log(`✅ [Sales] ${stats.length} días de estadísticas obtenidas`);
             res.json(stats);
         } catch (error) {
-            console.error('Error obteniendo estadísticas:', error);
+            console.error('❌ Error obteniendo estadísticas:', error);
             res.status(500).json({ message: 'Error al obtener estadísticas' });
         }
     });

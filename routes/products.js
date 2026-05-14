@@ -9,6 +9,8 @@ module.exports = (db) => {
         const { category, search, page = 1, limit = 20 } = req.query;
         const offset = (parseInt(page) - 1) * parseInt(limit);
         
+        console.log(`📦 [Products] Listando productos - página ${page}, categoría: ${category || 'todas'}, búsqueda: ${search || 'ninguna'}`);
+        
         let query = `
             SELECT p.*, u.nombreCompleto as sellerName
             FROM products p
@@ -41,18 +43,20 @@ module.exports = (db) => {
             
             parsedProducts.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
             
+            console.log(`✅ [Products] ${parsedProducts.length} productos encontrados`);
             res.json(parsedProducts);
         } catch (error) {
-            console.error('Error obteniendo productos:', error);
+            console.error('❌ Error obteniendo productos:', error);
             res.status(500).json({ message: 'Error al cargar productos' });
         }
     });
 
-    // ========== ENDPOINT CON PAGINACIÓN ==========
     // GET /api/products/paginated - Productos con paginación
     router.get('/paginated', async (req, res) => {
         const { category, search, page = 1, limit = 10 } = req.query;
         const offset = (parseInt(page) - 1) * parseInt(limit);
+        
+        console.log(`📦 [Products] Listado paginado - página ${page}, límite ${limit}`);
         
         let query = `
             SELECT p.*, u.nombreCompleto as sellerName
@@ -97,6 +101,7 @@ module.exports = (db) => {
             const total = countResult[0]?.total || 0;
             const totalPages = Math.ceil(total / parseInt(limit));
             
+            console.log(`✅ [Products] Página ${page}: ${parsedProducts.length}/${total} productos`);
             res.json({
                 data: parsedProducts,
                 total: total,
@@ -105,7 +110,7 @@ module.exports = (db) => {
                 limit: parseInt(limit)
             });
         } catch (error) {
-            console.error('Error obteniendo productos paginados:', error);
+            console.error('❌ Error obteniendo productos paginados:', error);
             res.status(500).json({ message: 'Error al cargar productos' });
         }
     });
@@ -113,7 +118,7 @@ module.exports = (db) => {
     // GET /api/products/my-products - Obtener TODOS los productos del vendedor autenticado
     router.get('/my-products', authenticateToken, isSeller, async (req, res) => {
         try {
-            console.log('🔍 [PRODUCTS] Obteniendo productos del vendedor:', req.userId);
+            console.log(`🔍 [Products] Obteniendo productos del vendedor: ${req.userId}`);
             
             const [products] = await db.query(
                 `SELECT p.*, u.nombreCompleto as sellerName
@@ -132,10 +137,10 @@ module.exports = (db) => {
             
             parsedProducts.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
             
-            console.log(`✅ [PRODUCTS] Productos encontrados: ${parsedProducts.length}`);
+            console.log(`✅ [Products] Productos encontrados: ${parsedProducts.length}`);
             res.json(parsedProducts);
         } catch (error) {
-            console.error('Error obteniendo productos del vendedor:', error);
+            console.error('❌ Error obteniendo productos del vendedor:', error);
             res.status(500).json({ message: 'Error al cargar tus productos' });
         }
     });
@@ -143,6 +148,8 @@ module.exports = (db) => {
     // POST /api/products - Crear producto
     router.post('/', authenticateToken, canCreateProduct, async (req, res) => {
         const { name, price, description, sellerId, sellerName, images, stock, location, category } = req.body;
+        
+        console.log(`📦 [Products] Creando producto: ${name} - vendedor: ${sellerId}`);
         
         if (sellerId !== req.userId && req.userRole !== 'Administrador') {
             return res.status(403).json({ message: 'No puedes crear productos para otro usuario' });
@@ -166,14 +173,14 @@ module.exports = (db) => {
                 [name, price, description, sellerId, sellerName, imagesJson, stock || 0, location || null, category || 'Otros']
             );
             
-            console.log(`✅ [PRODUCTS] Producto creado: ${name} (ID: ${result.insertId})`);
+            console.log(`✅ [Products] Producto creado: ${name} (ID: ${result.insertId})`);
             
             res.status(201).json({ 
                 id: result.insertId, 
                 message: 'Producto creado. Pendiente de aprobación por el administrador.' 
             });
         } catch (error) {
-            console.error('Error creando producto:', error);
+            console.error('❌ Error creando producto:', error);
             res.status(500).json({ message: 'Error al crear producto' });
         }
     });
@@ -181,9 +188,12 @@ module.exports = (db) => {
     // PUT /api/products/:id - Actualizar producto
     router.put('/:id', authenticateToken, async (req, res) => {
         const { name, price, description, images, stock, location, category, isAvailable } = req.body;
+        const productId = req.params.id;
+        
+        console.log(`📦 [Products] Actualizando producto ${productId}: ${name}`);
         
         try {
-            const [products] = await db.query('SELECT sellerId FROM products WHERE id = ?', [req.params.id]);
+            const [products] = await db.query('SELECT sellerId FROM products WHERE id = ?', [productId]);
             if (products.length === 0) {
                 return res.status(404).json({ message: 'Producto no encontrado' });
             }
@@ -199,20 +209,25 @@ module.exports = (db) => {
                  SET name = ?, price = ?, description = ?, images = ?, stock = ?, 
                      location = ?, category = ?, isAvailable = ?, updatedAt = NOW()
                  WHERE id = ?`,
-                [name, price, description, imagesJson, stock, location, category, isAvailable ? 1 : 0, req.params.id]
+                [name, price, description, imagesJson, stock, location, category, isAvailable ? 1 : 0, productId]
             );
             
+            console.log(`✅ [Products] Producto ${productId} actualizado`);
             res.json({ message: 'Producto actualizado correctamente' });
         } catch (error) {
-            console.error('Error actualizando producto:', error);
+            console.error('❌ Error actualizando producto:', error);
             res.status(500).json({ message: 'Error al actualizar producto' });
         }
     });
 
     // DELETE /api/products/:id - Eliminar producto
     router.delete('/:id', authenticateToken, async (req, res) => {
+        const productId = req.params.id;
+        
+        console.log(`📦 [Products] Eliminando producto ${productId}`);
+        
         try {
-            const [products] = await db.query('SELECT sellerId FROM products WHERE id = ?', [req.params.id]);
+            const [products] = await db.query('SELECT sellerId FROM products WHERE id = ?', [productId]);
             if (products.length === 0) {
                 return res.status(404).json({ message: 'Producto no encontrado' });
             }
@@ -221,15 +236,17 @@ module.exports = (db) => {
                 return res.status(403).json({ message: 'No tienes permiso para eliminar este producto' });
             }
             
-            await db.query('DELETE FROM products WHERE id = ?', [req.params.id]);
+            await db.query('DELETE FROM products WHERE id = ?', [productId]);
+            
+            console.log(`✅ [Products] Producto ${productId} eliminado`);
             res.json({ message: 'Producto eliminado correctamente' });
         } catch (error) {
-            console.error('Error eliminando producto:', error);
+            console.error('❌ Error eliminando producto:', error);
             res.status(500).json({ message: 'Error al eliminar producto' });
         }
     });
 
-    // ========== ENDPOINT PARA OBTENER STOCK ==========
+    // GET /api/products/:id/stock - Obtener stock de un producto
     router.get('/:id/stock', authenticateToken, async (req, res) => {
         const productId = req.params.id;
         
@@ -243,9 +260,10 @@ module.exports = (db) => {
                 return res.status(404).json({ message: 'Producto no encontrado' });
             }
             
+            console.log(`📦 [Products] Stock consultado para producto ${productId}: ${products[0].stock}`);
             res.json({ stock: products[0].stock, name: products[0].name });
         } catch (error) {
-            console.error('Error obteniendo stock:', error);
+            console.error('❌ Error obteniendo stock:', error);
             res.status(500).json({ message: 'Error al obtener stock' });
         }
     });

@@ -7,6 +7,8 @@ module.exports = (db) => {
 
     // GET /api/users/profile - Obtener perfil propio
     router.get('/profile', authenticateToken, async (req, res) => {
+        console.log(`👤 [Users] Obteniendo perfil de usuario ${req.userId}`);
+
         try {
             const [users] = await db.query(
                 `SELECT id, role, numeroControl, nombreCompleto, carrera, email, telefono, 
@@ -17,9 +19,10 @@ module.exports = (db) => {
             if (users.length === 0) {
                 return res.status(404).json({ message: 'Usuario no encontrado' });
             }
+            console.log(`✅ [Users] Perfil obtenido para usuario ${req.userId}`);
             res.json(users[0]);
         } catch (error) {
-            console.error('Error obteniendo perfil:', error);
+            console.error('❌ Error obteniendo perfil:', error);
             res.status(500).json({ message: 'Error al obtener perfil' });
         }
     });
@@ -28,13 +31,13 @@ module.exports = (db) => {
     router.post('/profile/request-change', authenticateToken, async (req, res) => {
         const { nombreCompleto, carrera, email, telefono, direccion, profileImage } = req.body;
         
-        console.log('📡 [API] Solicitud de cambio de perfil recibida');
-        console.log('📡 [API] Campos:', Object.keys(req.body));
+        console.log(`📝 [Users] Solicitud de cambio de perfil de usuario ${req.userId}`);
+        console.log(`📝 [Users] Campos solicitados:`, Object.keys(req.body));
         
         if (profileImage) {
-            console.log('📡 [API] Tamaño imagen Base64:', profileImage.length);
+            const sizeMB = (profileImage.length / (1024 * 1024)).toFixed(2);
+            console.log(`📝 [Users] Tamaño imagen Base64: ${sizeMB} MB`);
             
-            // Verificar tamaño máximo (10MB)
             if (profileImage.length > 10 * 1024 * 1024) {
                 return res.status(400).json({ message: 'La imagen es demasiado grande (máximo 10MB)' });
             }
@@ -45,7 +48,6 @@ module.exports = (db) => {
         }
         
         try {
-            // Obtener valores actuales del usuario
             const [users] = await db.query(
                 'SELECT nombreCompleto, carrera, email, telefono, direccion, profileImage FROM users WHERE id = ?',
                 [req.userId]
@@ -57,7 +59,6 @@ module.exports = (db) => {
             
             const current = users[0];
             
-            // Verificar si ya hay una solicitud pendiente
             const [existing] = await db.query(
                 'SELECT id FROM pending_profile_changes WHERE userId = ? AND status = "pending"',
                 [req.userId]
@@ -67,7 +68,6 @@ module.exports = (db) => {
                 return res.status(400).json({ message: 'Ya tienes una solicitud de cambios pendiente' });
             }
             
-            // Insertar solicitud de cambios
             const [result] = await db.query(
                 `INSERT INTO pending_profile_changes 
                 (userId, nombreCompleto, carrera, email, telefono, direccion, profileImage, status, createdAt)
@@ -75,9 +75,8 @@ module.exports = (db) => {
                 [req.userId, nombreCompleto || null, carrera || null, email || null, telefono || null, direccion || null, profileImage || null]
             );
             
-            console.log('✅ [API] Solicitud de cambio creada, ID:', result.insertId);
+            console.log(`✅ [Users] Solicitud de cambio creada, ID: ${result.insertId}`);
             
-            // Notificar a los administradores
             const [admins] = await db.query('SELECT id FROM users WHERE role = "Administrador"');
             for (const admin of admins) {
                 await db.query(
@@ -101,6 +100,8 @@ module.exports = (db) => {
         const { telefono, direccion, password, email, nombreCompleto, profileImage } = req.body;
         const updates = [];
         const params = [];
+
+        console.log(`👤 [Users] Actualizando perfil de usuario ${req.userId} (directo)`);
 
         if (telefono !== undefined) {
             updates.push('telefono = ?');
@@ -145,15 +146,18 @@ module.exports = (db) => {
         
         try {
             await db.query(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`, params);
+            console.log(`✅ [Users] Perfil actualizado directamente`);
             res.json({ message: 'Perfil actualizado correctamente' });
         } catch (error) {
-            console.error('Error actualizando perfil:', error);
+            console.error('❌ Error actualizando perfil:', error);
             res.status(500).json({ message: 'Error al actualizar perfil' });
         }
     });
 
     // GET /api/users - Obtener todos los usuarios (solo admin)
     router.get('/', authenticateToken, isAdmin, async (req, res) => {
+        console.log(`👥 [Users] Obteniendo lista de usuarios (admin: ${req.userId})`);
+
         try {
             const [users] = await db.query(
                 `SELECT id, role, numeroControl, nombreCompleto, carrera, email, telefono, 
@@ -161,15 +165,15 @@ module.exports = (db) => {
                  FROM users ORDER BY createdAt DESC`
             );
             
-            // Parsear credencialFotos si es string
             const parsedUsers = users.map(user => ({
                 ...user,
                 credencialFotos: typeof user.credencialFotos === 'string' ? JSON.parse(user.credencialFotos || '[]') : (user.credencialFotos || [])
             }));
             
+            console.log(`✅ [Users] ${parsedUsers.length} usuarios encontrados`);
             res.json(parsedUsers);
         } catch (error) {
-            console.error('Error obteniendo usuarios:', error);
+            console.error('❌ Error obteniendo usuarios:', error);
             res.status(500).json({ message: 'Error al obtener usuarios' });
         }
     });
@@ -179,15 +183,18 @@ module.exports = (db) => {
         const { isActive } = req.body;
         const userId = req.params.userId;
 
+        console.log(`🔒 [Users] ${isActive ? 'Activando' : 'Desactivando'} usuario ${userId} (admin: ${req.userId})`);
+
         if (parseInt(userId) === req.userId) {
             return res.status(400).json({ message: 'No puedes desactivar tu propia cuenta' });
         }
 
         try {
             await db.query('UPDATE users SET isActive = ? WHERE id = ?', [isActive, userId]);
+            console.log(`✅ [Users] Usuario ${userId} ${isActive ? 'activado' : 'desactivado'}`);
             res.json({ message: `Usuario ${isActive ? 'activado' : 'desactivado'} correctamente` });
         } catch (error) {
-            console.error('Error actualizando estado:', error);
+            console.error('❌ Error actualizando estado:', error);
             res.status(500).json({ message: 'Error al actualizar estado' });
         }
     });
@@ -195,17 +202,21 @@ module.exports = (db) => {
     // PUT /api/users/:userId/role - Cambiar rol (solo admin)
     router.put('/:userId/role', authenticateToken, isAdmin, async (req, res) => {
         const { role } = req.body;
+        const userId = req.params.userId;
         const validRoles = ['Comprador', 'Vendedor', 'Administrador'];
+        
+        console.log(`👤 [Users] Cambiando rol del usuario ${userId} a ${role} (admin: ${req.userId})`);
         
         if (!validRoles.includes(role)) {
             return res.status(400).json({ message: 'Rol inválido' });
         }
 
         try {
-            await db.query('UPDATE users SET role = ? WHERE id = ?', [role, req.params.userId]);
+            await db.query('UPDATE users SET role = ? WHERE id = ?', [role, userId]);
+            console.log(`✅ [Users] Rol del usuario ${userId} actualizado a ${role}`);
             res.json({ message: 'Rol actualizado correctamente' });
         } catch (error) {
-            console.error('Error actualizando rol:', error);
+            console.error('❌ Error actualizando rol:', error);
             res.status(500).json({ message: 'Error al actualizar rol' });
         }
     });
