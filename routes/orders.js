@@ -256,6 +256,97 @@ module.exports = (db) => {
         }
     });
 
+    // ✅ GET /api/orders/:orderId - Obtener detalle de un pedido específico
+    router.get('/:orderId', authenticateToken, async (req, res) => {
+        const { orderId } = req.params;
+        
+        try {
+            // Obtener información básica del pedido
+            const [orders] = await db.query(
+                `SELECT o.*, u.nombreCompleto as buyerName, u.numeroControl as buyerControl, u.telefono as buyerPhone, u.email as buyerEmail
+                 FROM orders o
+                 JOIN users u ON o.userId = u.id
+                 WHERE o.id = ?`,
+                [orderId]
+            );
+            
+            if (orders.length === 0) {
+                return res.status(404).json({ message: 'Pedido no encontrado' });
+            }
+            
+            const order = orders[0];
+            
+            // Verificar permiso: administrador, comprador, o vendedor del producto
+            const [sellerCheck] = await db.query(
+                `SELECT DISTINCT p.sellerId
+                 FROM order_items oi
+                 JOIN products p ON oi.productId = p.id
+                 WHERE oi.orderId = ? AND p.sellerId = ?`,
+                [orderId, req.userId]
+            );
+            
+            const isAuthorized = req.userRole === 'Administrador' || 
+                                order.userId === req.userId || 
+                                sellerCheck.length > 0;
+            
+            if (!isAuthorized) {
+                return res.status(403).json({ message: 'No tienes permiso para ver este pedido' });
+            }
+            
+            // Obtener items del pedido
+            const [items] = await db.query(
+                `SELECT oi.*, p.images as productImages
+                 FROM order_items oi
+                 LEFT JOIN products p ON oi.productId = p.id
+                 WHERE oi.orderId = ?`,
+                [orderId]
+            );
+            
+            // Procesar items (parsear imágenes si es necesario)
+            const processedItems = items.map(item => ({
+                ...item,
+                price: parseFloat(item.price),
+                imageUrl: item.productImages ? (JSON.parse(item.productImages || '[]')[0] || null) : null
+            }));
+            
+            order.items = processedItems;
+            order.total = parseFloat(order.total);
+            
+            // Agregar información de tracking si existe
+            const [tracking] = await db.query(
+                `SELECT ts.status as trackingStatus, ts.startedAt, ts.lastLat, ts.lastLng, ts.lastAddress,
+                        ts.lastSpeed, ts.lastAccuracy, ts.lastLocationUpdate
+                 FROM tracking_sessions ts
+                 WHERE ts.orderId = ?`,
+                [orderId]
+            );
+            
+            if (tracking.length > 0) {
+                order.tracking = {
+                    active: tracking[0].trackingStatus === 'active',
+                    status: tracking[0].trackingStatus,
+                    startedAt: tracking[0].startedAt,
+                    lastLocation: tracking[0].lastLat && tracking[0].lastLng ? {
+                        lat: tracking[0].lastLat,
+                        lng: tracking[0].lastLng,
+                        address: tracking[0].lastAddress,
+                        speed: tracking[0].lastSpeed,
+                        accuracy: tracking[0].lastAccuracy,
+                        updatedAt: tracking[0].lastLocationUpdate
+                    } : null
+                };
+            } else {
+                order.tracking = { active: false };
+            }
+            
+            res.json(order);
+            
+        } catch (error) {
+            console.error('❌ Error obteniendo detalle del pedido:', error);
+            res.status(500).json({ message: 'Error al obtener detalle del pedido: ' + error.message });
+        }
+    });
+
     // PATCH /api/orders/:orderId/status - Actualizar estado
     router.patch('/:orderId/status', authenticateToken, async (req, res) => {
         const { status } = req.body;
@@ -400,15 +491,15 @@ module.exports = (db) => {
         }
     });
 
-    // ========== CONFIRMACIONES DE ENTREGA ==========
+    // ========== CONFIRMACIONES DE ENTREGA CORREGIDAS ==========
 
-    // Vendedor confirma que entregó el pedido
+    // Vendedor confirma que entregó el pedido (CORREGIDO)
     router.post('/:orderId/confirm-seller', authenticateToken, async (req, res) => {
         const { orderId } = req.params;
         
         try {
             const [sellerCheck] = await db.query(
-                `SELECT DISTINCT p.sellerId, o.userId as buyerId
+                `SELECT DISTINCT p.sellerId, o.userId as buyerId, o.status
                  FROM orders o
                  JOIN order_items oi ON o.id = oi.orderId
                  JOIN products p ON oi.productId = p.id
@@ -427,29 +518,51 @@ module.exports = (db) => {
                 [orderId]
             );
             
-            const [order] = await db.query(`SELECT buyerReceived FROM orders WHERE id = ?`, [orderId]);
+            const [order] = await db.query(
+                `SELECT buyerReceived, status FROM orders WHERE id = ?`,
+                [orderId]
+            );
             
-            if (order[0]?.buyerReceived === 1) {
+            // ✅ CORREGIDO: Actualizar estado a 'delivered' si ambas confirmaciones están hechas
+            if (order[0]?.buyerReceived === 1 && order[0]?.status !== 'delivered') {
                 await db.query(
                     `UPDATE orders SET status = 'delivered', updatedAt = NOW() WHERE id = ?`,
                     [orderId]
                 );
+                
+                // Notificar al comprador que el pedido está completado
+                await db.query(
+                    `INSERT INTO notifications (userId, title, body, type, isRead, createdAt)
+                     VALUES (?, ?, ?, 'order_update', FALSE, NOW())`,
+                    [sellerCheck[0].buyerId,
+                     '✅ Pedido completado',
+                     `El vendedor confirmó la entrega de tu pedido #${orderId}. ¡Gracias por comprar en ByteSnack!`]
+                );
             }
             
-            res.json({ success: true, message: 'Entrega confirmada' });
+            // Notificar al comprador que el vendedor confirmó la entrega
+            await db.query(
+                `INSERT INTO notifications (userId, title, body, type, isRead, createdAt)
+                 VALUES (?, ?, ?, 'order_update', FALSE, NOW())`,
+                [sellerCheck[0].buyerId,
+                 '📦 Pedido entregado por vendedor',
+                 `El vendedor ha confirmado que entregó tu pedido #${orderId}. Confirma la recepción para completar la compra.`]
+            );
+            
+            res.json({ success: true, message: 'Entrega confirmada por vendedor' });
         } catch (error) {
             console.error('Error confirmando entrega:', error);
             res.status(500).json({ message: 'Error al confirmar entrega' });
         }
     });
 
-    // Comprador confirma que recibió el pedido
+    // Comprador confirma que recibió el pedido (CORREGIDO)
     router.post('/:orderId/confirm-buyer', authenticateToken, async (req, res) => {
         const { orderId } = req.params;
         
         try {
             const [orderCheck] = await db.query(
-                `SELECT userId FROM orders WHERE id = ? AND userId = ?`,
+                `SELECT userId, sellerConfirmed, status FROM orders WHERE id = ? AND userId = ?`,
                 [orderId, req.userId]
             );
             
@@ -464,16 +577,39 @@ module.exports = (db) => {
                 [orderId]
             );
             
-            const [order] = await db.query(`SELECT sellerConfirmed FROM orders WHERE id = ?`, [orderId]);
+            const [order] = await db.query(
+                `SELECT sellerConfirmed, status FROM orders WHERE id = ?`,
+                [orderId]
+            );
             
-            if (order[0]?.sellerConfirmed === 1) {
+            // ✅ CORREGIDO: Actualizar estado a 'delivered' si ambas confirmaciones están hechas
+            if (order[0]?.sellerConfirmed === 1 && order[0]?.status !== 'delivered') {
                 await db.query(
                     `UPDATE orders SET status = 'delivered', updatedAt = NOW() WHERE id = ?`,
                     [orderId]
                 );
             }
             
-            res.json({ success: true, message: 'Recepción confirmada' });
+            // Notificar a los vendedores que el comprador confirmó la recepción
+            const [sellerIds] = await db.query(
+                `SELECT DISTINCT p.sellerId
+                 FROM order_items oi
+                 JOIN products p ON oi.productId = p.id
+                 WHERE oi.orderId = ?`,
+                [orderId]
+            );
+            
+            for (const seller of sellerIds) {
+                await db.query(
+                    `INSERT INTO notifications (userId, title, body, type, isRead, createdAt)
+                     VALUES (?, ?, ?, 'order_update', FALSE, NOW())`,
+                    [seller.sellerId,
+                     '✅ Compra completada',
+                     `El comprador confirmó la recepción del pedido #${orderId}. ¡Venta completada!`]
+                );
+            }
+            
+            res.json({ success: true, message: 'Recepción confirmada por comprador' });
         } catch (error) {
             console.error('Error confirmando recepción:', error);
             res.status(500).json({ message: 'Error al confirmar recepción' });

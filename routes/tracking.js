@@ -1,15 +1,20 @@
+// backend/routes/tracking.js
 const express = require('express');
 const { authenticateToken, isSeller } = require('../middleware/auth');
 
 module.exports = (db, trackingService) => {
     const router = express.Router();
 
+    // POST /api/tracking/start - Iniciar seguimiento (vendedor)
     router.post('/start', authenticateToken, isSeller, async (req, res) => {
         const { orderId } = req.body;
+        
         if (!orderId) {
             return res.status(400).json({ message: 'ID de pedido requerido' });
         }
+        
         try {
+            // Verificar que el usuario es el vendedor del pedido
             const [orders] = await db.query(
                 `SELECT o.id, o.status, p.sellerId, p.sellerName, u.nombreCompleto as sellerNameFull
                  FROM orders o
@@ -19,114 +24,226 @@ module.exports = (db, trackingService) => {
                  WHERE o.id = ? AND p.sellerId = ? LIMIT 1`,
                 [orderId, req.userId]
             );
+            
             if (orders.length === 0) {
-                return res.status(403).json({ message: 'No tienes permiso' });
+                return res.status(403).json({ message: 'No tienes permiso para rastrear este pedido' });
             }
+            
             const order = orders[0];
+            
+            // Verificar que el pedido está en estado de envío
             if (order.status !== 'processing' && order.status !== 'shipped') {
                 return res.status(400).json({ message: 'El pedido no está en estado de envío' });
             }
+            
+            // Iniciar sesión de tracking
             await db.query(
-                `INSERT INTO tracking_sessions (orderId, sellerId, status, startedAt)
-                 VALUES (?, ?, 'active', NOW())
+                `INSERT INTO tracking_sessions (orderId, sellerId, sellerName, status, startedAt, updatedAt)
+                 VALUES (?, ?, ?, 'active', NOW(), NOW())
                  ON DUPLICATE KEY UPDATE status = 'active', updatedAt = NOW()`,
-                [orderId, req.userId]
+                [orderId, req.userId, order.sellerNameFull]
             );
-            trackingService.setSellerName(orderId, order.sellerNameFull);
-            res.json({ success: true, message: 'Seguimiento iniciado' });
+            
+            // Notificar vía WebSocket si el servicio está disponible
+            if (trackingService) {
+                trackingService.setSellerName(orderId, order.sellerNameFull);
+            }
+            
+            res.json({ 
+                success: true, 
+                message: 'Seguimiento iniciado correctamente',
+                orderId: orderId
+            });
         } catch (error) {
-            console.error('Error iniciando tracking:', error);
-            res.status(500).json({ message: 'Error al iniciar seguimiento' });
+            console.error('❌ Error iniciando tracking:', error);
+            res.status(500).json({ message: 'Error al iniciar seguimiento: ' + error.message });
         }
     });
 
+    // POST /api/tracking/stop - Detener seguimiento
     router.post('/stop', authenticateToken, async (req, res) => {
         const { orderId } = req.body;
+        
+        if (!orderId) {
+            return res.status(400).json({ message: 'ID de pedido requerido' });
+        }
+        
         try {
             await db.query(
-                `UPDATE tracking_sessions SET status = 'ended', endedAt = NOW() 
+                `UPDATE tracking_sessions 
+                 SET status = 'ended', endedAt = NOW(), updatedAt = NOW() 
                  WHERE orderId = ? AND sellerId = ?`,
                 [orderId, req.userId]
             );
-            res.json({ success: true, message: 'Seguimiento detenido' });
+            
+            res.json({ success: true, message: 'Seguimiento detenido correctamente' });
         } catch (error) {
-            console.error('Error deteniendo tracking:', error);
+            console.error('❌ Error deteniendo tracking:', error);
             res.status(500).json({ message: 'Error al detener seguimiento' });
         }
     });
 
+    // POST /api/tracking/location - Actualizar ubicación (vendedor)
     router.post('/location', authenticateToken, isSeller, async (req, res) => {
         const { orderId, lat, lng, address, speed, accuracy } = req.body;
+        
         if (!orderId || lat === undefined || lng === undefined) {
-            return res.status(400).json({ message: 'Datos incompletos' });
+            return res.status(400).json({ message: 'Datos incompletos: se requiere orderId, lat, lng' });
+        }
+
+        if (lat < -90 || lat > 90) {
+            return res.status(400).json({ message: 'Latitud inválida' });
+        }
+        
+        if (lng < -180 || lng > 180) {
+            return res.status(400).json({ message: 'Longitud inválida' });
         }
 
         try {
+            // Verificar que el usuario es el vendedor
+            const [sessionCheck] = await db.query(
+                `SELECT sellerId FROM tracking_sessions WHERE orderId = ?`,
+                [orderId]
+            );
+            
+            if (sessionCheck.length > 0 && sessionCheck[0].sellerId !== req.userId && req.userRole !== 'Administrador') {
+                return res.status(403).json({ message: 'No tienes permiso' });
+            }
+            
+            // Actualizar última ubicación en la sesión
             await db.query(
                 `UPDATE tracking_sessions 
-                 SET lastLat = ?, lastLng = ?, lastAddress = ?, lastSpeed = ?, lastAccuracy = ?, lastLocationUpdate = NOW()
-                 WHERE orderId = ? AND sellerId = ?`,
-                [lat, lng, address || null, speed || null, accuracy || null, orderId, req.userId]
+                 SET lastLat = ?, lastLng = ?, lastAddress = ?, lastSpeed = ?, lastAccuracy = ?, lastLocationUpdate = NOW(), updatedAt = NOW()
+                 WHERE orderId = ?`,
+                [lat, lng, address || null, speed || null, accuracy || null, orderId]
             );
 
+            // Guardar en historial
             await db.query(
                 `INSERT INTO tracking_locations (orderId, lat, lng, address, speed, accuracy, createdAt)
                  VALUES (?, ?, ?, ?, ?, ?, NOW())`,
                 [orderId, lat, lng, address || null, speed || null, accuracy || null]
             );
 
-            res.json({ success: true });
+            res.json({ success: true, message: 'Ubicación actualizada' });
         } catch (error) {
-            console.error('Error guardando ubicación:', error);
+            console.error('❌ Error guardando ubicación:', error);
             res.status(500).json({ message: 'Error al guardar ubicación' });
         }
     });
 
+    // ✅ GET /api/tracking/status/:orderId - Obtener estado del tracking (CORREGIDO)
     router.get('/status/:orderId', authenticateToken, async (req, res) => {
         const { orderId } = req.params;
+        
         try {
+            // Obtener sesión de tracking
             const [sessions] = await db.query(
-                `SELECT ts.*, u.nombreCompleto as sellerName
+                `SELECT ts.*, u.nombreCompleto as sellerName,
+                        o.sellerConfirmed, o.buyerReceived, o.status as orderStatus
                  FROM tracking_sessions ts
-                 JOIN users u ON ts.sellerId = u.id
+                 LEFT JOIN users u ON ts.sellerId = u.id
+                 LEFT JOIN orders o ON ts.orderId = o.id
                  WHERE ts.orderId = ?`,
                 [orderId]
             );
-            if (sessions.length === 0) {
-                return res.json({ active: false });
-            }
-            const session = sessions[0];
-            const isSeller = session.sellerId === req.userId;
-            const [orderCheck] = await db.query('SELECT userId FROM orders WHERE id = ?', [orderId]);
+            
+            // Verificar permisos del usuario
+            const [orderCheck] = await db.query(
+                `SELECT userId FROM orders WHERE id = ?`,
+                [orderId]
+            );
+            
             const isBuyer = orderCheck.length > 0 && orderCheck[0].userId === req.userId;
-            if (!isSeller && !isBuyer && req.userRole !== 'Administrador') {
-                return res.status(403).json({ message: 'No tienes permiso' });
+            const isSeller = sessions.length > 0 && sessions[0].sellerId === req.userId;
+            const isAdmin = req.userRole === 'Administrador';
+            
+            if (!isBuyer && !isSeller && !isAdmin) {
+                return res.status(403).json({ message: 'No tienes permiso para ver este tracking' });
             }
-            res.json({
+            
+            // Si no hay sesión de tracking
+            if (sessions.length === 0) {
+                // Verificar si el pedido existe
+                if (orderCheck.length === 0) {
+                    return res.status(404).json({ message: 'Pedido no encontrado' });
+                }
+                
+                // Obtener estado de confirmaciones del pedido
+                const [order] = await db.query(
+                    `SELECT sellerConfirmed, buyerReceived, status FROM orders WHERE id = ?`,
+                    [orderId]
+                );
+                
+                return res.json({ 
+                    active: false,
+                    sellerConfirmed: order[0]?.sellerConfirmed === 1,
+                    buyerReceived: order[0]?.buyerReceived === 1,
+                    orderStatus: order[0]?.status || 'pending'
+                });
+            }
+            
+            const session = sessions[0];
+            
+            // Construir respuesta completa
+            const response = {
                 active: session.status === 'active',
                 orderId: session.orderId,
+                sellerId: session.sellerId,
                 sellerName: session.sellerName,
                 status: session.status,
                 startedAt: session.startedAt,
+                endedAt: session.endedAt,
+                // Confirmaciones del pedido
+                sellerConfirmed: session.sellerConfirmed === 1,
+                buyerReceived: session.buyerReceived === 1,
+                orderStatus: session.orderStatus,
+                // Última ubicación si existe
                 lastLocation: session.lastLat && session.lastLng ? {
-                    lat: session.lastLat,
-                    lng: session.lastLng,
+                    lat: parseFloat(session.lastLat),
+                    lng: parseFloat(session.lastLng),
                     address: session.lastAddress,
-                    speed: session.lastSpeed,
-                    accuracy: session.lastAccuracy,
+                    speed: session.lastSpeed ? parseFloat(session.lastSpeed) : null,
+                    accuracy: session.lastAccuracy ? parseFloat(session.lastAccuracy) : null,
                     updatedAt: session.lastLocationUpdate
                 } : null
-            });
+            };
+            
+            res.json(response);
         } catch (error) {
-            console.error('Error:', error);
-            res.status(500).json({ message: 'Error al obtener estado' });
+            console.error('❌ Error obteniendo estado de tracking:', error);
+            res.status(500).json({ message: 'Error al obtener estado: ' + error.message });
         }
     });
 
+    // GET /api/tracking/history/:orderId - Obtener historial de ubicaciones
     router.get('/history/:orderId', authenticateToken, async (req, res) => {
         const { orderId } = req.params;
         const { limit = 50 } = req.query;
+        
         try {
+            // Verificar permisos
+            const [orderCheck] = await db.query(
+                `SELECT userId FROM orders WHERE id = ?`,
+                [orderId]
+            );
+            
+            const [sellerCheck] = await db.query(
+                `SELECT DISTINCT p.sellerId
+                 FROM order_items oi
+                 JOIN products p ON oi.productId = p.id
+                 WHERE oi.orderId = ? AND p.sellerId = ?`,
+                [orderId, req.userId]
+            );
+            
+            const isAuthorized = req.userRole === 'Administrador' || 
+                                (orderCheck.length > 0 && orderCheck[0].userId === req.userId) ||
+                                sellerCheck.length > 0;
+            
+            if (!isAuthorized) {
+                return res.status(403).json({ message: 'No tienes permiso' });
+            }
+            
             const [locations] = await db.query(
                 `SELECT lat, lng, address, speed, accuracy, createdAt
                  FROM tracking_locations
@@ -135,9 +252,20 @@ module.exports = (db, trackingService) => {
                  LIMIT ?`,
                 [orderId, parseInt(limit)]
             );
-            res.json({ locations: locations.reverse() });
+            
+            // Procesar ubicaciones
+            const processedLocations = locations.map(loc => ({
+                lat: parseFloat(loc.lat),
+                lng: parseFloat(loc.lng),
+                address: loc.address,
+                speed: loc.speed ? parseFloat(loc.speed) : null,
+                accuracy: loc.accuracy ? parseFloat(loc.accuracy) : null,
+                timestamp: loc.createdAt
+            })).reverse(); // Orden cronológico
+            
+            res.json({ locations: processedLocations });
         } catch (error) {
-            console.error('Error obteniendo historial:', error);
+            console.error('❌ Error obteniendo historial:', error);
             res.status(500).json({ message: 'Error al obtener historial' });
         }
     });

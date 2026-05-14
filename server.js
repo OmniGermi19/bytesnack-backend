@@ -85,19 +85,16 @@ async function inicializarBaseDatos() {
     try {
         // ============ AGREGAR COLUMNAS FALTANTES A TABLAS EXISTENTES ============
         
-        // Columnas de confirmación para orders
         await addColumnIfNotExists('orders', 'sellerConfirmed', 'BOOLEAN DEFAULT FALSE');
         await addColumnIfNotExists('orders', 'buyerConfirmed', 'BOOLEAN DEFAULT FALSE');
         await addColumnIfNotExists('orders', 'sellerConfirmedAt', 'TIMESTAMP NULL');
         await addColumnIfNotExists('orders', 'buyerConfirmedAt', 'TIMESTAMP NULL');
         
-        // Agregar columna address a tracking_sessions si no existe
         await addColumnIfNotExists('tracking_sessions', 'lastAddress', 'TEXT NULL');
         await addColumnIfNotExists('tracking_sessions', 'lastSpeed', 'DECIMAL(10,2) NULL');
         await addColumnIfNotExists('tracking_sessions', 'lastAccuracy', 'DECIMAL(10,2) NULL');
         await addColumnIfNotExists('tracking_sessions', 'sellerName', 'VARCHAR(100) NULL');
         
-        // Agregar columna isOnline a users si no existe
         await addColumnIfNotExists('users', 'isOnline', 'BOOLEAN DEFAULT FALSE');
         await addColumnIfNotExists('users', 'lastSeen', 'TIMESTAMP NULL');
 
@@ -457,7 +454,7 @@ app.use('/api/reviews', reviewsRouter);
 app.use('/api/chat', chatRouter);
 app.use('/api/reports', reportsRouter);
 
-// Tracking
+// ✅ PASO 8: TRACKING CON WEBSOCKET - CORREGIDO
 const TrackingService = require('./services/trackingService');
 const trackingRouter = require('./routes/tracking');
 
@@ -465,6 +462,8 @@ const server = http.createServer(app);
 const trackingService = new TrackingService(server);
 const trackingRoutes = trackingRouter(db, trackingService);
 app.use('/api/tracking', trackingRoutes);
+
+console.log('🚀 TrackingService inicializado con WebSocket en /ws/tracking');
 
 // Manejador de rutas no encontradas
 app.use('*', (req, res) => {
