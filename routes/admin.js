@@ -80,9 +80,9 @@ module.exports = (db) => {
         }
     });
 
-    // PUT /api/admin/approve-product/:id - Aprobar/Rechazar producto
+    // PUT /api/admin/approve-product/:id - Aprobar/Rechazar producto (con motivo)
     router.put('/approve-product/:id', authenticateToken, isAdmin, async (req, res) => {
-        const { approved } = req.body;
+        const { approved, rejectionReason } = req.body;
         const productId = req.params.id;
         
         try {
@@ -96,21 +96,29 @@ module.exports = (db) => {
             
             const [products] = await db.query('SELECT sellerId, name FROM products WHERE id = ?', [productId]);
             if (products.length > 0) {
-                const message = approved 
-                    ? `Tu producto "${products[0].name}" ha sido aprobado y ya está disponible en la tienda`
-                    : `Tu producto "${products[0].name}" ha sido rechazado. Por favor revisa los requisitos para publicar productos.`;
+                let message;
+                let title;
+                
+                if (approved) {
+                    title = '✅ Producto aprobado';
+                    message = `Tu producto "${products[0].name}" ha sido aprobado y ya está disponible en la tienda`;
+                } else {
+                    title = '❌ Producto rechazado';
+                    message = `Tu producto "${products[0].name}" ha sido rechazado.\nMotivo: ${rejectionReason || 'No especificado'}\n\nPor favor corrige el problema y vuelve a enviarlo.`;
+                }
                 
                 await db.query(
                     `INSERT INTO notifications (userId, title, body, type, isRead, createdAt)
                      VALUES (?, ?, ?, 'product_approval', FALSE, NOW())`,
-                    [products[0].sellerId, 
-                     approved ? '✅ Producto aprobado' : '❌ Producto rechazado',
-                     message]
+                    [products[0].sellerId, title, message]
                 );
             }
             
-            console.log(`✅ [ADMIN] Producto ${productId} ${approved ? 'aprobado' : 'rechazado'}`);
-            res.json({ message: approved ? 'Producto aprobado' : 'Producto rechazado' });
+            console.log(`✅ [ADMIN] Producto ${productId} ${approved ? 'aprobado' : 'rechazado'}${!approved && rejectionReason ? ' - Motivo: ' + rejectionReason : ''}`);
+            res.json({ 
+                message: approved ? 'Producto aprobado' : 'Producto rechazado',
+                success: true
+            });
         } catch (error) {
             console.error('❌ Error aprobando producto:', error);
             res.status(500).json({ message: 'Error al procesar el producto' });
@@ -152,9 +160,13 @@ module.exports = (db) => {
             
             if (users.length > 0) {
                 const title = approved ? '✅ Cuenta aprobada' : '❌ Cuenta rechazada';
-                const message = approved 
-                    ? `Hola ${users[0].nombreCompleto}, tu cuenta de vendedor ha sido aprobada. Ya puedes iniciar sesión con tu número de control: ${users[0].numeroControl}`
-                    : `Hola ${users[0].nombreCompleto}, tu solicitud para ser vendedor ha sido rechazada. Motivo: ${rejectionReason || 'No especificado'}. Contacta al administrador para más información.`;
+                let message;
+                
+                if (approved) {
+                    message = `Hola ${users[0].nombreCompleto}, tu cuenta de vendedor ha sido aprobada. Ya puedes iniciar sesión con tu número de control: ${users[0].numeroControl}`;
+                } else {
+                    message = `Hola ${users[0].nombreCompleto}, tu solicitud para ser vendedor ha sido rechazada.\nMotivo: ${rejectionReason || 'No especificado'}\n\nSi consideras que es un error, contacta al administrador.`;
+                }
                 
                 await db.query(
                     `INSERT INTO notifications (userId, title, body, type, isRead, createdAt)
@@ -260,7 +272,7 @@ module.exports = (db) => {
             const title = approved ? '✅ Cambios aprobados' : '❌ Cambios rechazados';
             const message = approved 
                 ? 'Los cambios solicitados en tu perfil han sido aprobados y aplicados.'
-                : `Los cambios solicitados en tu perfil han sido rechazados. Motivo: ${rejectionReason || 'No especificado'}`;
+                : `Los cambios solicitados en tu perfil han sido rechazados.\nMotivo: ${rejectionReason || 'No especificado'}\n\nSi consideras que es un error, contacta al administrador.`;
             
             await db.query(
                 `INSERT INTO notifications (userId, title, body, type, isRead, createdAt)
@@ -304,7 +316,7 @@ module.exports = (db) => {
                  VALUES (?, ?, ?, 'product_status', FALSE, NOW())`,
                 [product[0].sellerId,
                  '🚫 Producto ocultado',
-                 `Tu producto "${product[0].name}" ha sido ocultado por el administrador. Motivo: ${reason || 'No especificado'}`]
+                 `Tu producto "${product[0].name}" ha sido ocultado por el administrador.\nMotivo: ${reason || 'No especificado'}\n\nSi consideras que es un error, contacta al administrador.`]
             );
 
             console.log(`✅ [ADMIN] Producto ${id} ocultado`);

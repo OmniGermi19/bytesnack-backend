@@ -7,22 +7,26 @@ module.exports = (db) => {
 
     // POST /api/chat/init - Iniciar o obtener chat
     router.post('/init', authenticateToken, async (req, res) => {
-        const { orderId, productId, productName, sellerId, sellerName, buyerName } = req.body;
+        const { orderId, productId, productName, sellerId, sellerName, buyerId, buyerName } = req.body;
 
         console.log(`💬 [Chat] Iniciando chat para pedido ${orderId}, producto ${productId}`);
+        console.log(`💬 [Chat] Usuario: ${req.userId}, buyerId: ${buyerId}, sellerId: ${sellerId}`);
 
         if (!orderId || !productId || !sellerId) {
             return res.status(400).json({ message: 'Faltan campos requeridos' });
         }
 
         try {
+            // Verificar permisos: el usuario debe ser el comprador, el vendedor o admin
             const isBuyer = req.userId.toString() === buyerId?.toString();
             const isSeller = req.userId.toString() === sellerId.toString();
+            const isAdmin = req.userRole === 'Administrador';
 
-            if (!isBuyer && !isSeller && req.userRole !== 'Administrador') {
-                return res.status(403).json({ message: 'No tienes permiso' });
+            if (!isBuyer && !isSeller && !isAdmin) {
+                return res.status(403).json({ message: 'No tienes permiso para iniciar este chat' });
             }
 
+            // Buscar o crear chat
             let [chats] = await db.query(
                 `SELECT * FROM chats WHERE orderId = ? AND productId = ?`,
                 [orderId, productId]
@@ -30,10 +34,13 @@ module.exports = (db) => {
 
             let chatId;
             if (chats.length === 0) {
+                const finalBuyerId = buyerId || req.userId;
+                const finalSellerId = sellerId;
+                
                 const [result] = await db.query(
                     `INSERT INTO chats (orderId, productId, productName, buyerId, sellerId, status, createdAt)
                      VALUES (?, ?, ?, ?, ?, 'active', NOW())`,
-                    [orderId, productId, productName, buyerId || req.userId, sellerId]
+                    [orderId, productId, productName, finalBuyerId, finalSellerId]
                 );
                 chatId = result.insertId;
                 console.log(`✅ [Chat] Chat creado con ID ${chatId}`);
@@ -42,11 +49,13 @@ module.exports = (db) => {
                 console.log(`✅ [Chat] Chat existente ID ${chatId}`);
             }
 
+            // Obtener mensajes
             const [messages] = await db.query(
                 `SELECT * FROM messages WHERE chatId = ? ORDER BY createdAt ASC`,
                 [chatId]
             );
 
+            // Marcar mensajes como leídos si el usuario es el receptor
             const [chatInfo] = await db.query(`SELECT buyerId, sellerId FROM chats WHERE id = ?`, [chatId]);
             if (chatInfo.length > 0) {
                 const isBuyerUser = chatInfo[0].buyerId === req.userId;
@@ -70,12 +79,12 @@ module.exports = (db) => {
             res.json({
                 chatId,
                 messages,
-                chat: chats[0] || { buyerId, sellerId, productName }
+                chat: chats[0] || { buyerId: buyerId || req.userId, sellerId: sellerId, productName }
             });
 
         } catch (error) {
             console.error('❌ Error iniciando chat:', error);
-            res.status(500).json({ message: 'Error al iniciar chat' });
+            res.status(500).json({ message: 'Error al iniciar chat: ' + error.message });
         }
     });
 
@@ -90,6 +99,7 @@ module.exports = (db) => {
         }
 
         try {
+            // Verificar que el usuario pertenece al chat
             const [chat] = await db.query(
                 `SELECT c.*, u.nombreCompleto, u.role 
                  FROM chats c
@@ -99,19 +109,21 @@ module.exports = (db) => {
             );
 
             if (chat.length === 0 && req.userRole !== 'Administrador') {
-                return res.status(403).json({ message: 'No tienes permiso' });
+                return res.status(403).json({ message: 'No tienes permiso para enviar mensajes en este chat' });
             }
 
             const chatData = chat[0];
             const senderRole = chatData.role;
             const senderName = chatData.nombreCompleto;
 
+            // Insertar mensaje
             const [result] = await db.query(
                 `INSERT INTO messages (chatId, senderId, senderName, senderRole, message, type, imageUrl, createdAt)
                  VALUES (?, ?, ?, ?, ?, ?, ?, NOW())`,
                 [chatId, req.userId, senderName, senderRole, message, type || 'text', imageUrl || null]
             );
 
+            // Actualizar último mensaje y contadores
             const isBuyer = chatData.buyerId === req.userId;
             if (isBuyer) {
                 await db.query(
@@ -134,7 +146,7 @@ module.exports = (db) => {
 
         } catch (error) {
             console.error('❌ Error enviando mensaje:', error);
-            res.status(500).json({ message: 'Error al enviar mensaje' });
+            res.status(500).json({ message: 'Error al enviar mensaje: ' + error.message });
         }
     });
 
@@ -179,7 +191,7 @@ module.exports = (db) => {
 
         } catch (error) {
             console.error('❌ Error obteniendo conversaciones:', error);
-            res.status(500).json({ message: 'Error al obtener conversaciones' });
+            res.status(500).json({ message: 'Error al obtener conversaciones: ' + error.message });
         }
     });
 
@@ -190,13 +202,14 @@ module.exports = (db) => {
         console.log(`💬 [Chat] Obteniendo mensajes del chat ${chatId} para usuario ${req.userId}`);
 
         try {
+            // Verificar permiso
             const [chat] = await db.query(
                 `SELECT * FROM chats WHERE id = ? AND (buyerId = ? OR sellerId = ?)`,
                 [chatId, req.userId, req.userId]
             );
 
             if (chat.length === 0 && req.userRole !== 'Administrador') {
-                return res.status(403).json({ message: 'No tienes permiso' });
+                return res.status(403).json({ message: 'No tienes permiso para ver este chat' });
             }
 
             const [messages] = await db.query(
@@ -204,6 +217,7 @@ module.exports = (db) => {
                 [chatId]
             );
 
+            // Marcar como leídos
             const isBuyer = chat[0].buyerId === req.userId;
             if (isBuyer) {
                 await db.query(`UPDATE chats SET buyerUnreadCount = 0 WHERE id = ?`, [chatId]);
@@ -222,7 +236,7 @@ module.exports = (db) => {
 
         } catch (error) {
             console.error('❌ Error obteniendo mensajes:', error);
-            res.status(500).json({ message: 'Error al obtener mensajes' });
+            res.status(500).json({ message: 'Error al obtener mensajes: ' + error.message });
         }
     });
 
@@ -258,13 +272,15 @@ module.exports = (db) => {
 
         } catch (error) {
             console.error('❌ Error marcando como leído:', error);
-            res.status(500).json({ message: 'Error al marcar como leído' });
+            res.status(500).json({ message: 'Error al marcar como leído: ' + error.message });
         }
     });
 
     // GET /api/chat/unread/count - Obtener total de mensajes no leídos
     router.get('/unread/count', authenticateToken, async (req, res) => {
         try {
+            console.log(`💬 [Chat] Obteniendo contador de no leídos para usuario ${req.userId}`);
+
             const [result] = await db.query(
                 `SELECT 
                     COALESCE(SUM(CASE WHEN buyerId = ? THEN buyerUnreadCount ELSE 0 END), 0) as buyerUnread,
@@ -275,12 +291,12 @@ module.exports = (db) => {
             );
 
             const totalUnread = (result[0]?.buyerUnread || 0) + (result[0]?.sellerUnread || 0);
-            console.log(`💬 [Chat] Usuario ${req.userId} tiene ${totalUnread} mensajes no leídos`);
+            console.log(`✅ [Chat] Usuario ${req.userId} tiene ${totalUnread} mensajes no leídos`);
             res.json({ totalUnread });
 
         } catch (error) {
             console.error('❌ Error obteniendo contador:', error);
-            res.status(500).json({ message: 'Error al obtener contador' });
+            res.status(500).json({ message: 'Error al obtener contador: ' + error.message });
         }
     });
 

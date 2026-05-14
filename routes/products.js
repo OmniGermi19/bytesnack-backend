@@ -175,6 +175,18 @@ module.exports = (db) => {
             
             console.log(`✅ [Products] Producto creado: ${name} (ID: ${result.insertId})`);
             
+            // Notificar a administradores sobre nuevo producto pendiente
+            const [admins] = await db.query('SELECT id FROM users WHERE role = "Administrador"');
+            for (const admin of admins) {
+                await db.query(
+                    `INSERT INTO notifications (userId, title, body, type, isRead, createdAt)
+                     VALUES (?, ?, ?, 'product_approval', FALSE, NOW())`,
+                    [admin.id,
+                     '🆕 Nuevo producto pendiente',
+                     `${sellerName} ha publicado "${name}". Revisa el producto para aprobarlo.`]
+                );
+            }
+            
             res.status(201).json({ 
                 id: result.insertId, 
                 message: 'Producto creado. Pendiente de aprobación por el administrador.' 

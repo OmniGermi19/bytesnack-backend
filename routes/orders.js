@@ -264,7 +264,7 @@ module.exports = (db) => {
         }
     });
 
-    // ✅ GET /api/orders/:orderId - Obtener detalle de un pedido específico
+    // GET /api/orders/:orderId - Obtener detalle de un pedido específico
     router.get('/:orderId', authenticateToken, async (req, res) => {
         const { orderId } = req.params;
         
@@ -456,6 +456,7 @@ module.exports = (db) => {
                         'UPDATE products SET stock = stock + ? WHERE id = ?',
                         [item.quantity, item.productId]
                     );
+                    console.log(`📦 [Orders] Stock restaurado: producto ${item.productId} +${item.quantity}`);
                 }
                 
                 buyerTitle = 'Pedido cancelado';
@@ -500,6 +501,7 @@ module.exports = (db) => {
 
     // ========== CONFIRMACIONES DE ENTREGA ==========
 
+    // Vendedor confirma entrega
     router.post('/:orderId/confirm-seller', authenticateToken, async (req, res) => {
         const { orderId } = req.params;
         
@@ -519,6 +521,7 @@ module.exports = (db) => {
                 return res.status(403).json({ message: 'No tienes permiso' });
             }
             
+            // Actualizar confirmación del vendedor
             await db.query(
                 `UPDATE orders 
                  SET sellerConfirmed = TRUE, sellerConfirmedAt = NOW(), updatedAt = NOW() 
@@ -526,12 +529,14 @@ module.exports = (db) => {
                 [orderId]
             );
             
+            // Verificar si ambas confirmaciones están completas
             const [order] = await db.query(
                 `SELECT buyerReceived, status FROM orders WHERE id = ?`,
                 [orderId]
             );
             
-            if (order[0]?.buyerReceived === 1 && order[0]?.status !== 'delivered') {
+            // Si ambas confirmaciones son TRUE, cambiar estado a delivered
+            if (order[0]?.buyerReceived === 1) {
                 await db.query(
                     `UPDATE orders SET status = 'delivered', updatedAt = NOW() WHERE id = ?`,
                     [orderId]
@@ -546,6 +551,7 @@ module.exports = (db) => {
                 );
             }
             
+            // Notificar al comprador
             await db.query(
                 `INSERT INTO notifications (userId, title, body, type, isRead, createdAt)
                  VALUES (?, ?, ?, 'order_update', FALSE, NOW())`,
@@ -562,6 +568,7 @@ module.exports = (db) => {
         }
     });
 
+    // Comprador confirma recepción
     router.post('/:orderId/confirm-buyer', authenticateToken, async (req, res) => {
         const { orderId } = req.params;
         
@@ -577,6 +584,7 @@ module.exports = (db) => {
                 return res.status(403).json({ message: 'No tienes permiso' });
             }
             
+            // Actualizar confirmación del comprador
             await db.query(
                 `UPDATE orders 
                  SET buyerReceived = TRUE, buyerReceivedAt = NOW(), updatedAt = NOW() 
@@ -584,18 +592,21 @@ module.exports = (db) => {
                 [orderId]
             );
             
+            // Verificar si ambas confirmaciones están completas
             const [order] = await db.query(
                 `SELECT sellerConfirmed, status FROM orders WHERE id = ?`,
                 [orderId]
             );
             
-            if (order[0]?.sellerConfirmed === 1 && order[0]?.status !== 'delivered') {
+            // Si ambas confirmaciones son TRUE, cambiar estado a delivered
+            if (order[0]?.sellerConfirmed === 1) {
                 await db.query(
                     `UPDATE orders SET status = 'delivered', updatedAt = NOW() WHERE id = ?`,
                     [orderId]
                 );
             }
             
+            // Notificar a los vendedores
             const [sellerIds] = await db.query(
                 `SELECT DISTINCT p.sellerId
                  FROM order_items oi
