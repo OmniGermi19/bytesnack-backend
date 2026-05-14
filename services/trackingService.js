@@ -1,40 +1,19 @@
 // backend/services/trackingService.js
 const WebSocket = require('ws');
 const jwt = require('jsonwebtoken');
-const mysql = require('mysql2/promise');
 
 class TrackingService {
-    constructor(server) {
+    constructor(server, db) {
         this.wss = new WebSocket.Server({ server, path: '/ws/tracking' });
         this.clients = new Map(); // orderId -> Set of clients
         this.sellerSessions = new Map(); // orderId -> seller WebSocket
         this.userSessions = new Map(); // userId -> WebSocket
         this.locationHistory = new Map(); // orderId -> last 10 locations
         this.heartbeatInterval = null;
-        this.db = null;
+        this.db = db; // Usar la conexión existente
         this._initialize();
-        this._connectDatabase();
         this._startHeartbeat();
         console.log('🚀 [TrackingService] Servicio de tracking inicializado');
-    }
-
-    async _connectDatabase() {
-        try {
-            if (process.env.DATABASE_URL) {
-                this.db = await mysql.createConnection(process.env.DATABASE_URL);
-            } else {
-                this.db = await mysql.createConnection({
-                    host: process.env.MYSQLHOST || 'mysql.railway.internal',
-                    port: parseInt(process.env.MYSQLPORT || '3306'),
-                    user: process.env.MYSQLUSER || 'root',
-                    password: process.env.MYSQLPASSWORD,
-                    database: process.env.MYSQLDATABASE || 'railway'
-                });
-            }
-            console.log('✅ [TrackingService] Conectado a MySQL');
-        } catch (error) {
-            console.error('❌ [TrackingService] Error conectando a MySQL:', error.message);
-        }
     }
 
     _startHeartbeat() {

@@ -461,7 +461,7 @@ const TrackingService = require('./services/trackingService');
 const trackingRouter = require('./routes/tracking');
 
 const server = http.createServer(app);
-const trackingService = new TrackingService(server);
+const trackingService = new TrackingService(server,db);
 const trackingRoutes = trackingRouter(db, trackingService);
 app.use('/api/tracking', trackingRoutes);
 
