@@ -535,7 +535,7 @@ const reviewsRouter = require('./routes/reviews')(db);
 const chatRouter = require('./routes/chat')(db);
 const reportsRouter = require('./routes/reports')(db);
 const paymentsRouter = require('./routes/payments')(db);
-const bankAccountsRouter = require('./routes/bank-accounts')(db);
+const sellersRouter = require('./routes/sellers')(db);  // ✅ Corregido: sellers en lugar de bank-accounts
 const cardsRouter = require('./routes/cards')(db);
 
 app.use('/api/auth', authRouter);
@@ -550,7 +550,7 @@ app.use('/api/reviews', reviewsRouter);
 app.use('/api/chat', chatRouter);
 app.use('/api/reports', reportsRouter);
 app.use('/api/payments', paymentsRouter);
-app.use('/api/bank-accounts', bankAccountsRouter);
+app.use('/api/sellers', sellersRouter);  // ✅ Corregido: /api/sellers
 app.use('/api/cards', cardsRouter);
 
 // ============ TRACKING CON WEBSOCKET ============
