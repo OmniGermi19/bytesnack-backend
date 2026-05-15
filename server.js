@@ -99,8 +99,13 @@ async function inicializarBaseDatos() {
 
         await addColumnIfNotExists('users', 'isOnline', 'BOOLEAN DEFAULT FALSE');
         await addColumnIfNotExists('users', 'lastSeen', 'TIMESTAMP NULL');
+        
+        // ✅ NUEVAS TABLAS PARA CUENTAS BANCARIAS Y TARJETAS
+        await addColumnIfNotExists('users', 'stripeCustomerId', 'VARCHAR(255) NULL');
+        await addColumnIfNotExists('users', 'stripeAccountId', 'VARCHAR(255) NULL');
+        await addColumnIfNotExists('users', 'bankAccountStatus', "ENUM('pending', 'verified', 'rejected') DEFAULT 'pending'");
 
-        // ============ CREAR TABLA DE PAGOS ============
+        // ============ TABLA DE PAGOS ============
         await db.query(`CREATE TABLE IF NOT EXISTS payments (
             id INT PRIMARY KEY AUTO_INCREMENT,
             orderId INT NOT NULL,
@@ -109,6 +114,7 @@ async function inicializarBaseDatos() {
             status ENUM('pending', 'completed', 'failed', 'refunded') DEFAULT 'pending',
             paymentMethod VARCHAR(50) NOT NULL,
             stripePaymentIntentId VARCHAR(255),
+            stripeTransferId VARCHAR(255),
             createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
             FOREIGN KEY (orderId) REFERENCES orders(id) ON DELETE CASCADE,
@@ -117,6 +123,70 @@ async function inicializarBaseDatos() {
             INDEX idx_status (status)
         )`);
         console.log('✅ [DB] Tabla payments verificada');
+
+        // ✅ NUEVA TABLA: Cuentas bancarias de vendedores
+        await db.query(`CREATE TABLE IF NOT EXISTS seller_bank_accounts (
+            id INT PRIMARY KEY AUTO_INCREMENT,
+            userId INT NOT NULL,
+            accountHolderName VARCHAR(100) NOT NULL,
+            bankName VARCHAR(100) NOT NULL,
+            accountNumber VARCHAR(50) NOT NULL,
+            clabe VARCHAR(18),
+            routingNumber VARCHAR(50),
+            stripeBankAccountId VARCHAR(255),
+            isDefault BOOLEAN DEFAULT FALSE,
+            status ENUM('pending', 'verified', 'rejected') DEFAULT 'pending',
+            verificationError TEXT,
+            createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            FOREIGN KEY (userId) REFERENCES users(id) ON DELETE CASCADE,
+            INDEX idx_userId (userId),
+            INDEX idx_status (status)
+        )`);
+        console.log('✅ [DB] Tabla seller_bank_accounts verificada');
+
+        // ✅ NUEVA TABLA: Tarjetas guardadas de compradores
+        await db.query(`CREATE TABLE IF NOT EXISTS saved_cards (
+            id INT PRIMARY KEY AUTO_INCREMENT,
+            userId INT NOT NULL,
+            stripePaymentMethodId VARCHAR(255) NOT NULL,
+            last4 VARCHAR(4) NOT NULL,
+            brand VARCHAR(50) NOT NULL,
+            expMonth INT NOT NULL,
+            expYear INT NOT NULL,
+            isDefault BOOLEAN DEFAULT FALSE,
+            createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            FOREIGN KEY (userId) REFERENCES users(id) ON DELETE CASCADE,
+            INDEX idx_userId (userId),
+            INDEX idx_stripePaymentMethodId (stripePaymentMethodId)
+        )`);
+        console.log('✅ [DB] Tabla saved_cards verificada');
+
+        // ✅ NUEVA TABLA: Transferencias a vendedores
+        await db.query(`CREATE TABLE IF NOT EXISTS transfers (
+            id INT PRIMARY KEY AUTO_INCREMENT,
+            orderId INT NOT NULL,
+            sellerId INT NOT NULL,
+            buyerId INT NOT NULL,
+            amount DECIMAL(10,2) NOT NULL,
+            fee DECIMAL(10,2) DEFAULT 0,
+            netAmount DECIMAL(10,2) NOT NULL,
+            status ENUM('pending', 'processing', 'completed', 'failed') DEFAULT 'pending',
+            stripeTransferId VARCHAR(255),
+            stripeDestinationId VARCHAR(255),
+            errorMessage TEXT,
+            completedAt TIMESTAMP NULL,
+            createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            FOREIGN KEY (orderId) REFERENCES orders(id) ON DELETE CASCADE,
+            FOREIGN KEY (sellerId) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (buyerId) REFERENCES users(id) ON DELETE CASCADE,
+            INDEX idx_orderId (orderId),
+            INDEX idx_sellerId (sellerId),
+            INDEX idx_status (status)
+        )`);
+        console.log('✅ [DB] Tabla transfers verificada');
 
         // ============ CREAR TABLAS SI NO EXISTEN ============
 
@@ -148,6 +218,9 @@ async function inicializarBaseDatos() {
             bannedAt TIMESTAMP NULL,
             isOnline BOOLEAN DEFAULT FALSE,
             lastSeen TIMESTAMP NULL,
+            stripeCustomerId VARCHAR(255) NULL,
+            stripeAccountId VARCHAR(255) NULL,
+            bankAccountStatus ENUM('pending', 'verified', 'rejected') DEFAULT 'pending',
             INDEX idx_numeroControl (numeroControl),
             INDEX idx_role (role),
             INDEX idx_isActive (isActive)
@@ -461,7 +534,9 @@ const notificationsRouter = require('./routes/notifications')(db);
 const reviewsRouter = require('./routes/reviews')(db);
 const chatRouter = require('./routes/chat')(db);
 const reportsRouter = require('./routes/reports')(db);
-const paymentsRouter = require('./routes/payments')(db); // ✅ Agregar router de pagos
+const paymentsRouter = require('./routes/payments')(db);
+const bankAccountsRouter = require('./routes/bank-accounts')(db);
+const cardsRouter = require('./routes/cards')(db);
 
 app.use('/api/auth', authRouter);
 app.use('/api/products', productsRouter);
@@ -474,7 +549,9 @@ app.use('/api/notifications', notificationsRouter);
 app.use('/api/reviews', reviewsRouter);
 app.use('/api/chat', chatRouter);
 app.use('/api/reports', reportsRouter);
-app.use('/api/payments', paymentsRouter); // ✅ Registrar rutas de pagos
+app.use('/api/payments', paymentsRouter);
+app.use('/api/bank-accounts', bankAccountsRouter);
+app.use('/api/cards', cardsRouter);
 
 // ============ TRACKING CON WEBSOCKET ============
 const TrackingService = require('./services/trackingService');
