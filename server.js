@@ -68,7 +68,7 @@ async function addColumnIfNotExists(tableName, columnName, columnDefinition) {
             AND TABLE_NAME = ? 
             AND COLUMN_NAME = ?
         `, [tableName, columnName]);
-        
+
         if (exists[0].count === 0) {
             await db.query(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnDefinition}`);
             console.log(`✅ [DB] Columna ${columnName} agregada a ${tableName}`);
@@ -84,21 +84,39 @@ async function addColumnIfNotExists(tableName, columnName, columnDefinition) {
 async function inicializarBaseDatos() {
     try {
         console.log('📦 [DB] Inicializando base de datos...');
-        
+
         // ============ AGREGAR COLUMNAS FALTANTES A TABLAS EXISTENTES ============
-        
+
         await addColumnIfNotExists('orders', 'sellerConfirmed', 'BOOLEAN DEFAULT FALSE');
         await addColumnIfNotExists('orders', 'buyerConfirmed', 'BOOLEAN DEFAULT FALSE');
         await addColumnIfNotExists('orders', 'sellerConfirmedAt', 'TIMESTAMP NULL');
         await addColumnIfNotExists('orders', 'buyerConfirmedAt', 'TIMESTAMP NULL');
-        
+
         await addColumnIfNotExists('tracking_sessions', 'lastAddress', 'TEXT NULL');
         await addColumnIfNotExists('tracking_sessions', 'lastSpeed', 'DECIMAL(10,2) NULL');
         await addColumnIfNotExists('tracking_sessions', 'lastAccuracy', 'DECIMAL(10,2) NULL');
         await addColumnIfNotExists('tracking_sessions', 'sellerName', 'VARCHAR(100) NULL');
-        
+
         await addColumnIfNotExists('users', 'isOnline', 'BOOLEAN DEFAULT FALSE');
         await addColumnIfNotExists('users', 'lastSeen', 'TIMESTAMP NULL');
+
+        // ============ CREAR TABLA DE PAGOS ============
+        await db.query(`CREATE TABLE IF NOT EXISTS payments (
+            id INT PRIMARY KEY AUTO_INCREMENT,
+            orderId INT NOT NULL,
+            userId INT NOT NULL,
+            amount DECIMAL(10,2) NOT NULL,
+            status ENUM('pending', 'completed', 'failed', 'refunded') DEFAULT 'pending',
+            paymentMethod VARCHAR(50) NOT NULL,
+            stripePaymentIntentId VARCHAR(255),
+            createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            FOREIGN KEY (orderId) REFERENCES orders(id) ON DELETE CASCADE,
+            FOREIGN KEY (userId) REFERENCES users(id) ON DELETE CASCADE,
+            INDEX idx_orderId (orderId),
+            INDEX idx_status (status)
+        )`);
+        console.log('✅ [DB] Tabla payments verificada');
 
         // ============ CREAR TABLAS SI NO EXISTEN ============
 
@@ -443,6 +461,7 @@ const notificationsRouter = require('./routes/notifications')(db);
 const reviewsRouter = require('./routes/reviews')(db);
 const chatRouter = require('./routes/chat')(db);
 const reportsRouter = require('./routes/reports')(db);
+const paymentsRouter = require('./routes/payments')(db); // ✅ Agregar router de pagos
 
 app.use('/api/auth', authRouter);
 app.use('/api/products', productsRouter);
@@ -455,13 +474,14 @@ app.use('/api/notifications', notificationsRouter);
 app.use('/api/reviews', reviewsRouter);
 app.use('/api/chat', chatRouter);
 app.use('/api/reports', reportsRouter);
+app.use('/api/payments', paymentsRouter); // ✅ Registrar rutas de pagos
 
 // ============ TRACKING CON WEBSOCKET ============
 const TrackingService = require('./services/trackingService');
 const trackingRouter = require('./routes/tracking');
 
 const server = http.createServer(app);
-const trackingService = new TrackingService(server,db);
+const trackingService = new TrackingService(server, db);
 const trackingRoutes = trackingRouter(db, trackingService);
 app.use('/api/tracking', trackingRoutes);
 
